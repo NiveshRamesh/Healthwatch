@@ -1,0 +1,486 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>HealthWatch — Infrastructure Diagnostics</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --surface: #111827;
+    --surface2: #1a2235;
+    --border: #1e2d45;
+    --accent: #00d4aa;
+    --accent2: #0099ff;
+    --warn: #f59e0b;
+    --error: #ef4444;
+    --ok: #10b981;
+    --unknown: #6b7280;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --mono: 'Space Mono', monospace;
+    --sans: 'DM Sans', sans-serif;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+  }
+
+  /* ── Grid background ── */
+  body::before {
+    content:'';
+    position:fixed; inset:0; z-index:0;
+    background-image:
+      linear-gradient(rgba(0,212,170,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,170,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events:none;
+  }
+
+  .wrapper { position:relative; z-index:1; max-width:860px; margin:0 auto; padding:32px 20px 60px; }
+
+  /* ── Header ── */
+  .header {
+    display:flex; align-items:flex-start; justify-content:space-between;
+    margin-bottom:36px; flex-wrap:wrap; gap:16px;
+  }
+  .header-left h1 {
+    font-family: var(--mono);
+    font-size:1.6rem;
+    letter-spacing:-0.5px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+  }
+  .header-left p {
+    font-size:0.82rem; color:var(--muted); margin-top:4px;
+    font-family:var(--mono);
+  }
+  .header-right { display:flex; flex-direction:column; align-items:flex-end; gap:10px; }
+
+  /* ── Run button ── */
+  .run-btn {
+    display:inline-flex; align-items:center; gap:8px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color:#0a0e1a; font-family:var(--mono); font-size:0.78rem; font-weight:700;
+    border:none; border-radius:8px; padding:10px 20px; cursor:pointer;
+    transition: all 0.2s; letter-spacing:0.5px;
+  }
+  .run-btn:hover { opacity:0.85; transform:translateY(-1px); }
+  .run-btn:disabled { opacity:0.5; cursor:not-allowed; transform:none; }
+  .run-btn .spinner {
+    width:14px; height:14px; border:2px solid rgba(0,0,0,0.3);
+    border-top-color:#0a0e1a; border-radius:50%;
+    animation: spin 0.7s linear infinite;
+  }
+
+  /* ── Last checked ── */
+  .last-checked {
+    font-family:var(--mono); font-size:0.72rem; color:var(--muted);
+    background:var(--surface); border:1px solid var(--border);
+    padding:6px 12px; border-radius:6px;
+  }
+  .last-checked span { color:var(--accent); }
+
+  /* ── Summary pills ── */
+  .summary {
+    display:flex; gap:10px; margin-bottom:28px; flex-wrap:wrap;
+  }
+  .pill {
+    display:flex; align-items:center; gap:6px;
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:20px; padding:6px 14px;
+    font-size:0.78rem; font-family:var(--mono);
+  }
+  .pill .dot { width:8px; height:8px; border-radius:50%; }
+  .pill.ok .dot { background:var(--ok); box-shadow:0 0 6px var(--ok); }
+  .pill.warn .dot { background:var(--warn); box-shadow:0 0 6px var(--warn); }
+  .pill.error .dot { background:var(--error); box-shadow:0 0 6px var(--error); }
+  .pill.ok { color:var(--ok); border-color:rgba(16,185,129,0.25); }
+  .pill.warn { color:var(--warn); border-color:rgba(245,158,11,0.25); }
+  .pill.error { color:var(--error); border-color:rgba(239,68,68,0.25); }
+
+  /* ── Section cards ── */
+  .section {
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:14px; margin-bottom:16px; overflow:hidden;
+    transition: border-color 0.3s;
+  }
+  .section:hover { border-color: rgba(0,212,170,0.2); }
+
+  .section-header {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:18px 22px; cursor:pointer; user-select:none;
+    border-bottom:1px solid transparent; transition: background 0.2s;
+  }
+  .section-header:hover { background: var(--surface2); }
+  .section.open .section-header { border-bottom-color:var(--border); }
+
+  .section-title {
+    display:flex; align-items:center; gap:12px;
+  }
+  .section-icon {
+    width:36px; height:36px; border-radius:10px;
+    display:flex; align-items:center; justify-content:center;
+    font-size:1.1rem;
+  }
+  .section-icon.clickhouse { background:rgba(255,183,0,0.12); }
+  .section-icon.kafka      { background:rgba(0,153,255,0.12); }
+  .section-icon.postgres   { background:rgba(51,102,204,0.12); }
+  .section-icon.minio      { background:rgba(198,53,40,0.12); }
+  .section-icon.kubernetes { background:rgba(50,108,229,0.12); }
+
+  .section-name { font-size:0.95rem; font-weight:600; }
+  .section-sub  { font-size:0.75rem; color:var(--muted); margin-top:1px; font-family:var(--mono); }
+
+  .section-badge {
+    display:flex; align-items:center; gap:10px;
+  }
+  .status-badge {
+    display:flex; align-items:center; gap:6px;
+    font-family:var(--mono); font-size:0.72rem; font-weight:700;
+    padding:4px 10px; border-radius:6px; letter-spacing:0.5px;
+  }
+  .status-badge .led { width:7px; height:7px; border-radius:50%; }
+  .status-badge.ok   { background:rgba(16,185,129,0.12); color:var(--ok);
+                       border:1px solid rgba(16,185,129,0.25); }
+  .status-badge.ok .led { background:var(--ok); box-shadow:0 0 5px var(--ok); animation: pulse-ok 2s infinite; }
+  .status-badge.warn { background:rgba(245,158,11,0.12); color:var(--warn);
+                       border:1px solid rgba(245,158,11,0.25); }
+  .status-badge.warn .led { background:var(--warn); }
+  .status-badge.error{ background:rgba(239,68,68,0.12); color:var(--error);
+                       border:1px solid rgba(239,68,68,0.25); }
+  .status-badge.error .led { background:var(--error); animation: pulse-err 1s infinite; }
+  .status-badge.unknown { background:rgba(107,114,128,0.12); color:var(--unknown);
+                          border:1px solid rgba(107,114,128,0.25); }
+  .status-badge.unknown .led { background:var(--unknown); }
+  .chevron { color:var(--muted); font-size:0.7rem; transition:transform 0.25s; }
+  .section.open .chevron { transform:rotate(180deg); }
+
+  /* ── Check rows ── */
+  .section-body { padding:8px 0; }
+  .check-row {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:12px 22px 12px 70px;
+    border-bottom:1px solid rgba(30,45,69,0.5);
+    animation: fadeIn 0.3s ease;
+  }
+  .check-row:last-child { border-bottom:none; }
+  .check-row:hover { background:var(--surface2); }
+  .check-name { font-size:0.88rem; color:var(--text); }
+  .check-right { display:flex; align-items:center; gap:12px; }
+  .check-detail { font-size:0.75rem; color:var(--muted); font-family:var(--mono); max-width:320px; text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .check-icon { font-size:1rem; }
+  .check-icon.ok      { color:var(--ok); }
+  .check-icon.warn    { color:var(--warn); }
+  .check-icon.error   { color:var(--error); }
+  .check-icon.unknown { color:var(--unknown); }
+
+  /* ── Skeleton loading ── */
+  .skeleton { background:var(--surface2); border-radius:4px; animation: shimmer 1.5s infinite; }
+  .skeleton-row {
+    display:flex; align-items:center; justify-content:space-between;
+    padding:14px 22px 14px 70px;
+  }
+  .sk-text { height:14px; width:160px; }
+  .sk-badge { height:22px; width:70px; border-radius:6px; }
+
+  /* ── Empty / Loading state ── */
+  .state-overlay {
+    text-align:center; padding:60px 20px;
+    font-family:var(--mono); color:var(--muted);
+  }
+  .state-overlay .big { font-size:2rem; margin-bottom:12px; }
+  .state-overlay p { font-size:0.82rem; }
+
+  /* ── Footer ── */
+  .footer {
+    text-align:center; margin-top:48px;
+    font-family:var(--mono); font-size:0.72rem; color:var(--muted);
+  }
+  .footer span { color:var(--accent); }
+
+  /* ── Animations ── */
+  @keyframes spin { to { transform:rotate(360deg); } }
+  @keyframes pulse-ok {
+    0%,100% { box-shadow:0 0 4px var(--ok); }
+    50%      { box-shadow:0 0 10px var(--ok); }
+  }
+  @keyframes pulse-err {
+    0%,100% { box-shadow:0 0 4px var(--error); }
+    50%      { box-shadow:0 0 10px var(--error); }
+  }
+  @keyframes fadeIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:none; } }
+  @keyframes shimmer {
+    0%   { background-color: #1a2235; }
+    50%  { background-color: #1e2a40; }
+    100% { background-color: #1a2235; }
+  }
+
+  /* ── Overall status bar ── */
+  .overall-bar {
+    display:flex; align-items:center; gap:14px;
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:12px; padding:16px 22px; margin-bottom:20px;
+  }
+  .overall-icon { font-size:1.8rem; }
+  .overall-text h2 { font-size:1rem; font-weight:600; }
+  .overall-text p  { font-size:0.78rem; color:var(--muted); margin-top:2px; font-family:var(--mono); }
+</style>
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="header-left">
+      <h1>⬡ HealthWatch</h1>
+      <p>Infrastructure Diagnostics · Self-Monitor Service</p>
+    </div>
+    <div class="header-right">
+      <button class="run-btn" id="runBtn" onclick="triggerChecks()">
+        <span id="runBtnIcon">▶</span>
+        <span id="runBtnText">RUN DIAGNOSTICS</span>
+      </button>
+      <div class="last-checked" id="lastChecked">Last checked: <span>—</span></div>
+    </div>
+  </div>
+
+  <!-- Overall bar -->
+  <div class="overall-bar" id="overallBar">
+    <div class="overall-icon" id="overallIcon">🔍</div>
+    <div class="overall-text">
+      <h2 id="overallTitle">Awaiting diagnostics</h2>
+      <p id="overallSub">Click "Run Diagnostics" or wait for the scheduled check</p>
+    </div>
+  </div>
+
+  <!-- Summary pills -->
+  <div class="summary" id="summaryPills" style="display:none;"></div>
+
+  <!-- Service sections -->
+  <div id="sections">
+    <div class="state-overlay">
+      <div class="big">🛰️</div>
+      <p>No diagnostic data yet.<br/>Run a check to see results.</p>
+    </div>
+  </div>
+
+  <div class="footer">
+    Auto-scheduled at <span>08:00</span> &amp; <span>20:00</span> daily &nbsp;·&nbsp;
+    Service: <span>healthwatch-pod</span>
+  </div>
+
+</div>
+
+<script>
+const SECTIONS_META = {
+  clickhouse: { label:"ClickHouse", sub:"Database · Query Engine", icon:"🗄️", cls:"clickhouse" },
+  kafka:      { label:"Kafka & Zookeeper", sub:"Message Broker · Streaming", icon:"📨", cls:"kafka" },
+  postgres:   { label:"PostgreSQL", sub:"App DB · Metadata Store", icon:"🐘", cls:"postgres" },
+  minio:      { label:"MinIO", sub:"Object Storage · Config Store", icon:"🪣", cls:"minio" },
+  kubernetes: { label:"Kubernetes", sub:"Orchestration · Pod Health", icon:"☸️", cls:"kubernetes" }
+};
+
+const STATUS_ICONS = { ok:"✅", warn:"⚠️", error:"❌", unknown:"⬜" };
+const STATUS_LABELS = { ok:"HEALTHY", warn:"WARNING", error:"FAILED", unknown:"UNKNOWN" };
+
+let pollingTimer = null;
+let openSections = new Set(["clickhouse","kafka","postgres","minio","kubernetes"]);
+
+async function fetchStatus() {
+  const res = await fetch('/api/status');
+  return res.json();
+}
+
+async function triggerChecks() {
+  const btn = document.getElementById('runBtn');
+  const icon = document.getElementById('runBtnIcon');
+  const txt  = document.getElementById('runBtnText');
+  btn.disabled = true;
+  icon.innerHTML = '<span class="spinner"></span>';
+  txt.textContent = 'RUNNING...';
+  await fetch('/api/run', { method:'POST' });
+  pollUntilDone();
+}
+
+function pollUntilDone() {
+  if (pollingTimer) clearInterval(pollingTimer);
+  pollingTimer = setInterval(async () => {
+    const data = await fetchStatus();
+    renderAll(data);
+    if (!data.is_running) {
+      clearInterval(pollingTimer);
+      resetButton();
+    }
+  }, 1500);
+}
+
+function resetButton() {
+  const btn = document.getElementById('runBtn');
+  document.getElementById('runBtnIcon').textContent = '▶';
+  document.getElementById('runBtnText').textContent = 'RUN DIAGNOSTICS';
+  btn.disabled = false;
+}
+
+function sectionOverallStatus(checks) {
+  const statuses = Object.values(checks).map(c => c.status);
+  if (statuses.includes('error')) return 'error';
+  if (statuses.includes('warn')) return 'warn';
+  if (statuses.includes('unknown')) return 'unknown';
+  return 'ok';
+}
+
+function renderAll(data) {
+  // Last checked
+  const lc = document.getElementById('lastChecked');
+  lc.innerHTML = data.last_checked
+    ? `Last checked: <span>${data.last_checked}</span>`
+    : `Last checked: <span>—</span>`;
+
+  if (!data.results || Object.keys(data.results).length === 0) {
+    if (data.is_running) {
+      document.getElementById('sections').innerHTML = renderSkeletons();
+      document.getElementById('overallTitle').textContent = 'Running diagnostics...';
+      document.getElementById('overallSub').textContent = 'Checking all services, please wait';
+      document.getElementById('overallIcon').textContent = '⏳';
+    }
+    return;
+  }
+
+  // Compute counts
+  let okCount=0, warnCount=0, errCount=0;
+  for (const [, checks] of Object.entries(data.results)) {
+    const s = sectionOverallStatus(checks);
+    if (s==='ok') okCount++;
+    else if (s==='warn') warnCount++;
+    else errCount++;
+  }
+
+  // Overall bar
+  const total = okCount + warnCount + errCount;
+  let overallIcon, overallTitle, overallSub;
+  if (errCount > 0) {
+    overallIcon = '🔴'; overallTitle = `${errCount} service${errCount>1?'s':''} failing`;
+    overallSub = 'Immediate attention required';
+  } else if (warnCount > 0) {
+    overallIcon = '🟡'; overallTitle = `${warnCount} service${warnCount>1?'s':''} with warnings`;
+    overallSub = 'Services degraded — review recommended';
+  } else {
+    overallIcon = '🟢'; overallTitle = 'All systems operational';
+    overallSub = `${total} services healthy — no issues detected`;
+  }
+  document.getElementById('overallIcon').textContent = overallIcon;
+  document.getElementById('overallTitle').textContent = overallTitle;
+  document.getElementById('overallSub').textContent = overallSub;
+
+  // Summary pills
+  const pills = document.getElementById('summaryPills');
+  pills.style.display = 'flex';
+  pills.innerHTML = `
+    <div class="pill ok"><div class="dot"></div>${okCount} Healthy</div>
+    <div class="pill warn"><div class="dot"></div>${warnCount} Warning</div>
+    <div class="pill error"><div class="dot"></div>${errCount} Failed</div>
+  `;
+
+  // Sections
+  const container = document.getElementById('sections');
+  container.innerHTML = '';
+  for (const [key, checks] of Object.entries(data.results)) {
+    const meta = SECTIONS_META[key] || { label:key, sub:'', icon:'🔧', cls:'' };
+    const overall = sectionOverallStatus(checks);
+    const isOpen = openSections.has(key);
+    const card = document.createElement('div');
+    card.className = `section${isOpen?' open':''}`;
+    card.id = `sec-${key}`;
+
+    const rowsHtml = Object.entries(checks).map(([name, c]) => `
+      <div class="check-row">
+        <span class="check-name">${name}</span>
+        <div class="check-right">
+          <span class="check-detail">${c.detail || ''}</span>
+          <span class="check-icon ${c.status}">${STATUS_ICONS[c.status]||'⬜'}</span>
+        </div>
+      </div>
+    `).join('');
+
+    card.innerHTML = `
+      <div class="section-header" onclick="toggleSection('${key}')">
+        <div class="section-title">
+          <div class="section-icon ${meta.cls}">${meta.icon}</div>
+          <div>
+            <div class="section-name">${meta.label}</div>
+            <div class="section-sub">${meta.sub}</div>
+          </div>
+        </div>
+        <div class="section-badge">
+          <div class="status-badge ${overall}">
+            <div class="led"></div>${STATUS_LABELS[overall]}
+          </div>
+          <div class="chevron">▼</div>
+        </div>
+      </div>
+      ${isOpen ? `<div class="section-body">${rowsHtml}</div>` : ''}
+    `;
+    container.appendChild(card);
+  }
+}
+
+function renderSkeletons() {
+  return Object.keys(SECTIONS_META).map(key => {
+    const meta = SECTIONS_META[key];
+    return `
+    <div class="section" style="margin-bottom:16px">
+      <div class="section-header" style="cursor:default">
+        <div class="section-title">
+          <div class="section-icon ${meta.cls}">${meta.icon}</div>
+          <div>
+            <div class="section-name">${meta.label}</div>
+            <div class="section-sub">${meta.sub}</div>
+          </div>
+        </div>
+        <div class="skeleton sk-badge"></div>
+      </div>
+      <div class="section-body">
+        ${[1,2,3].map(()=>`
+        <div class="skeleton-row">
+          <div class="skeleton sk-text"></div>
+          <div class="skeleton sk-badge"></div>
+        </div>`).join('')}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function toggleSection(key) {
+  const sec = document.getElementById(`sec-${key}`);
+  if (!sec) return;
+  if (openSections.has(key)) {
+    openSections.delete(key);
+    sec.classList.remove('open');
+    sec.querySelector('.section-body')?.remove();
+  } else {
+    openSections.add(key);
+    sec.classList.add('open');
+    // re-render to inject rows
+    fetchStatus().then(renderAll);
+  }
+}
+
+// Initial load
+fetchStatus().then(data => {
+  renderAll(data);
+  if (data.is_running) pollUntilDone();
+});
+
+// Refresh display every 30s passively
+setInterval(() => {
+  fetchStatus().then(data => { if (!data.is_running) renderAll(data); });
+}, 30000);
+</script>
+</body>
+</html>

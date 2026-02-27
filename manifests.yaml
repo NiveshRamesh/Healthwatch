@@ -1,0 +1,140 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# HealthWatch — Kubernetes Manifests
+# Deploy with: kubectl apply -f k8s/
+# Access via:  kubectl port-forward svc/healthwatch 8080:8080 -n <your-namespace>
+# ──────────────────────────────────────────────────────────────────────────────
+
+---
+# ServiceAccount — so the pod can read pod/node info from Kubernetes API
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: healthwatch
+  namespace: default   # <-- change to your namespace
+
+---
+# ClusterRole — read-only access to pods and nodes
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: healthwatch-reader
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "nodes"]
+    verbs: ["get", "list", "watch"]
+
+---
+# ClusterRoleBinding
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: healthwatch-reader-binding
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: healthwatch-reader
+subjects:
+  - kind: ServiceAccount
+    name: healthwatch
+    namespace: default   # <-- change to your namespace
+
+---
+# ConfigMap — all service connection settings
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: healthwatch-config
+  namespace: default   # <-- change to your namespace
+data:
+  CLICKHOUSE_HOST: "clickhouse"          # K8s service name
+  CLICKHOUSE_PORT: "8123"
+  CLICKHOUSE_USER: "default"
+  KAFKA_BOOTSTRAP: "kafka:9092"
+  ZOOKEEPER_HOST:  "zookeeper"
+  ZOOKEEPER_PORT:  "2181"
+  MINIO_ENDPOINT:  "http://minio:9000"
+  K8S_NAMESPACE:   "default"            # <-- namespace where your pods live
+  MONITORED_PODS:  "denver,nairobi,cairo,kafka,zookeeper,clickhouse,postgres,minio"
+
+---
+# Secret — sensitive credentials (base64 encode your values)
+# To encode: echo -n 'yourpassword' | base64
+apiVersion: v1
+kind: Secret
+metadata:
+  name: healthwatch-secrets
+  namespace: default   # <-- change to your namespace
+type: Opaque
+stringData:             # stringData auto-encodes, change to data: for raw base64
+  CLICKHOUSE_PASSWORD: ""
+  POSTGRES_DSN: "postgresql://user:password@postgres:5432/appdb"
+  MINIO_ACCESS_KEY: "minioadmin"
+  MINIO_SECRET_KEY: "minioadmin"
+
+---
+# Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: healthwatch
+  namespace: default   # <-- change to your namespace
+  labels:
+    app: healthwatch
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: healthwatch
+  template:
+    metadata:
+      labels:
+        app: healthwatch
+    spec:
+      serviceAccountName: healthwatch
+      containers:
+        - name: healthwatch
+          image: your-registry/healthwatch:latest   # <-- replace with your image
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+              name: http
+          envFrom:
+            - configMapRef:
+                name: healthwatch-config
+            - secretRef:
+                name: healthwatch-secrets
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          livenessProbe:
+            httpGet:
+              path: /api/status
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api/status
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+---
+# Service — ClusterIP (access via port-forward only, no external exposure)
+apiVersion: v1
+kind: Service
+metadata:
+  name: healthwatch
+  namespace: default   # <-- change to your namespace
+spec:
+  selector:
+    app: healthwatch
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP
