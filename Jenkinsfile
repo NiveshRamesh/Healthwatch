@@ -15,5 +15,11 @@ pipeline {
             }
         }
 
+        stage('Copy Image to Server') {
+            steps {
+                bat 'scp healthwatch.tar ubuntu@103.65.21.198:/tmp/'
+            }
+        }
+
     }
 }
