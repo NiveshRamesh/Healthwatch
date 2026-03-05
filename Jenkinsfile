@@ -33,20 +33,7 @@ pipeline {
         stage('Deploy on Server') {
             steps {
                 bat """
-                ssh -o StrictHostKeyChecking=no %SERVER% "
-                set -e
-
-                echo 'Moving image to storage'
-                sudo mv /tmp/healthwatch.tar %IMAGE_PATH%/
-
-                echo 'Importing image into container runtime'
-                sudo crictl image import %IMAGE_PATH%/healthwatch.tar
-
-                echo 'Deploying Helm chart'
-                helm upgrade --install healthwatch %HELM_PATH% -n %NAMESPACE%
-
-                echo 'Deployment completed'
-                "
+                ssh -o StrictHostKeyChecking=no %SERVER% "sudo mv /tmp/healthwatch.tar %IMAGE_PATH%/healthwatch.tar && sudo crictl image import %IMAGE_PATH%/healthwatch.tar && helm upgrade --install healthwatch %HELM_PATH% -n %NAMESPACE% --create-namespace"
                 """
             }
         }
