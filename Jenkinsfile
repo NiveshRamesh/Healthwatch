@@ -15,10 +15,11 @@ pipeline {
             }
         }
 
-        stage('Save Image as TAR') {
+        stage('Save Image TAR') {
             steps {
                 sh 'docker save healthwatch > healthwatch.tar'
             }
         }
+
     }
 }
