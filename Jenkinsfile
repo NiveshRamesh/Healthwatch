@@ -3,15 +3,9 @@ pipeline {
 
     stages {
 
-        stage('Build Docker Image') {
+        stage('Docker Test') {
             steps {
-                bat 'docker build -t healthwatch .'
-            }
-        }
-
-        stage('Save Image TAR') {
-            steps {
-                bat 'docker save healthwatch -o healthwatch.tar'
+                bat 'docker version'
             }
         }
 
