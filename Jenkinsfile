@@ -5,13 +5,13 @@ pipeline {
 
         stage('Build Docker Image') {
             steps {
-                sh 'docker build -t healthwatch .'
+                bat 'docker build -t healthwatch .'
             }
         }
 
         stage('Save Image TAR') {
             steps {
-                sh 'docker save healthwatch > healthwatch.tar'
+                bat 'docker save healthwatch -o healthwatch.tar'
             }
         }
 
