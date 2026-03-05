@@ -4,7 +4,7 @@ pipeline {
     environment {
         SERVER = "ubuntu@103.65.21.198"
         IMAGE_PATH = "/data1/generated-files/vunet-images"
-        HELM_PATH = "/home/vunet/launcher/static-file/helmcharts/healthwatch"
+        HELM_DIR = "/home/vunet/launcher/static-file/helmcharts/healthwatch"
         NAMESPACE = "vsmaps"
     }
 
@@ -24,17 +24,15 @@ pipeline {
 
         stage('Copy TAR to Server') {
             steps {
-                bat """
-                scp -o StrictHostKeyChecking=no healthwatch.tar %SERVER%:/tmp/
-                """
+                bat 'scp -o StrictHostKeyChecking=no healthwatch.tar %SERVER%:/tmp/'
             }
         }
 
         stage('Deploy on Server') {
             steps {
                 bat """
-                ssh -o StrictHostKeyChecking=no %SERVER% "sudo mv /tmp/healthwatch.tar %IMAGE_PATH%/healthwatch.tar && sudo crictl image import %IMAGE_PATH%/healthwatch.tar && helm upgrade --install healthwatch %HELM_PATH% -n %NAMESPACE% --create-namespace"
-                """
+ssh -o StrictHostKeyChecking=no %SERVER% "sudo mv /tmp/healthwatch.tar %IMAGE_PATH%/healthwatch.tar && sudo ctr -n k8s.io images import %IMAGE_PATH%/healthwatch.tar && cd %HELM_DIR% && helm upgrade --install healthwatch . -n %NAMESPACE% --create-namespace"
+"""
             }
         }
 
