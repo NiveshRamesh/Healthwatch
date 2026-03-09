@@ -1,139 +1,170 @@
-# HealthWatch — Infrastructure Self-Monitor Service
+# HealthWatch — React Migration Guide
 
-A standalone FastAPI service that runs health checks on all your infrastructure
-components and displays them in a clean diagnostic dashboard — JioFiber-style.
+## New Project Structure
 
-## What it monitors
+```
+D:\Vumonitor\files\
+├── app/
+│   └── main.py                ← FastAPI backend (edit per BACKEND_CHANGES.py)
+├── frontend-src/              ← React source (NEW — rename from healthwatch-react)
+│   ├── public/
+│   │   └── index.html
+│   ├── src/
+│   │   ├── index.js
+│   │   ├── index.css
+│   │   ├── App.jsx
+│   │   ├── utils.js
+│   │   ├── hooks/
+│   │   │   └── useHealthWatch.js
+│   │   └── components/
+│   │       ├── CheckRow.jsx
+│   │       ├── ConsumerLagPanel.jsx
+│   │       ├── LiveDataPanel.jsx
+│   │       ├── Modal.jsx
+│   │       ├── ServiceSection.jsx
+│   │       ├── TopicDiagBar.jsx
+│   │       └── Tooltip.jsx
+│   └── package.json
+├── requirements.txt
+└── Dockerfile                 ← Updated (multi-stage build)
+```
 
-| Service       | Checks                                                     |
-|---------------|------------------------------------------------------------|
-| ClickHouse    | Connection, system tables reachable, query execution       |
-| Kafka         | Broker connection, topic listing, Zookeeper ruok/imok      |
-| PostgreSQL    | Connection, version, query execution                       |
-| MinIO         | /minio/health/live, /minio/health/ready                    |
-| Kubernetes    | Each named pod (phase, readiness, restart count), nodes    |
+## Files to REMOVE from old project
 
-## Schedule
-- **Automatic**: runs at **08:00** and **20:00** daily
-- **Manual**: click "RUN DIAGNOSTICS" button in the UI any time
+| File/Folder       | Why                                      |
+|-------------------|------------------------------------------|
+| `templates/`      | Entire folder — replaced by React        |
+| `templates/index.html` | Replaced by React build             |
+
+## Files to ADD
+
+| File/Folder       | What                                     |
+|-------------------|------------------------------------------|
+| `frontend-src/`   | Entire React source from this package    |
+| `Dockerfile`      | Replace old Dockerfile with new one      |
+
+## Changes to app/main.py
+
+Open `app/main.py` and make these edits:
+
+### 1. Replace old imports (top of file)
+```python
+# REMOVE:
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+
+# ADD:
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
+```
+
+### 2. Add CORS middleware (right after `app = FastAPI(...)`)
+```python
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+### 3. Remove Jinja setup
+```python
+# REMOVE these two lines:
+templates = Jinja2Templates(directory="templates")
+
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+```
+
+### 4. Add static file serving + catch-all (at the bottom, after all /api routes)
+```python
+app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
+
+@app.get("/{full_path:path}")
+async def serve_react(full_path: str):
+    return FileResponse("frontend/index.html")
+```
+
+### 5. Update requirements.txt — add this line
+```
+python-multipart
+```
 
 ---
 
-## Local Development
+## Running Locally from VS Code
 
+### Prerequisites (install once)
+- Node.js 20+: https://nodejs.org
+- Python 3.11+: already have it
+- VS Code with Python extension
+
+### Step 1 — Start the FastAPI backend
+
+Open a terminal in VS Code (`Ctrl+`` `):
 ```bash
-cd healthwatch
+cd D:\Vumonitor\files
+
+# Install Python deps if needed
 pip install -r requirements.txt
 
-# Set env vars (or create a .env file)
-export CLICKHOUSE_HOST=localhost
-export KAFKA_BOOTSTRAP=localhost:9092
-export POSTGRES_DSN=postgresql://user:pass@localhost:5432/appdb
-export MINIO_ENDPOINT=http://localhost:9000
-export K8S_NAMESPACE=default
-export MONITORED_PODS=denver,nairobi,cairo,kafka,zookeeper,clickhouse,postgres,minio
-
+# Run FastAPI
 uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
-# Open http://localhost:8080
 ```
+Backend runs at: http://localhost:8080
+
+### Step 2 — Start the React frontend
+
+Open a SECOND terminal in VS Code:
+```bash
+cd D:\Vumonitor\files\frontend-src
+
+# Install Node deps (first time only)
+npm install
+
+# Start React dev server
+npm start
+```
+React runs at: http://localhost:3000
+It auto-proxies all `/healthwatch/api/*` calls to port 8080 (via `"proxy"` in package.json).
+
+### Step 3 — Open in browser
+Go to: **http://localhost:3000**
+
+Hot reload works — edit any `.jsx` file and browser updates instantly. No rebuild needed.
 
 ---
 
-## Docker Build & Push
+## Deploying (Docker — same as before)
 
-```bash
-# Build
-docker build -t your-registry/healthwatch:latest .
+```cmd
+cd D:\Vumonitor\files
 
-# Push
-docker push your-registry/healthwatch:latest
+docker build -t healthwatch:latest .
+docker save healthwatch:latest -o healthwatch.tar
+scp healthwatch.tar ubuntu@<server>:~/
+ssh ubuntu@<server>
+sudo ctr -n k8s.io images import ~/healthwatch.tar
+helm upgrade healthwatch . -n vsmaps
+kubectl rollout restart deployment/healthwatch -n vsmaps
 ```
+
+The Dockerfile now does a multi-stage build:
+1. Stage 1: `npm run build` → produces optimized React files
+2. Stage 2: Copies build output into Python image at `./frontend/`
+3. FastAPI serves `frontend/index.html` for all non-API routes
 
 ---
 
-## Kubernetes Deployment
+## API routes (no changes needed in backend)
 
-### 1. Update the manifests
-
-Edit `k8s/manifests.yaml` and replace:
-- `namespace: default` → your actual namespace everywhere
-- `your-registry/healthwatch:latest` → your actual image path
-- Connection strings in ConfigMap and Secret
-
-### 2. Update credentials in Secret
-
-```bash
-# Option A: edit stringData directly in manifests.yaml (auto-encoded)
-# Option B: create from literals
-kubectl create secret generic healthwatch-secrets \
-  --from-literal=CLICKHOUSE_PASSWORD=yourpass \
-  --from-literal=POSTGRES_DSN=postgresql://user:pass@postgres:5432/appdb \
-  --from-literal=MINIO_ACCESS_KEY=minioadmin \
-  --from-literal=MINIO_SECRET_KEY=minioadmin \
-  -n your-namespace
-```
-
-### 3. Apply all manifests
-
-```bash
-kubectl apply -f k8s/manifests.yaml
-```
-
-### 4. Verify pod is running
-
-```bash
-kubectl get pods -n your-namespace | grep healthwatch
-kubectl logs -f deployment/healthwatch -n your-namespace
-```
-
-### 5. Access the dashboard
-
-```bash
-kubectl port-forward svc/healthwatch 8080:8080 -n your-namespace
-# Open http://localhost:8080
-```
-
----
-
-## Project Structure
-
-```
-healthwatch/
-├── app/
-│   └── main.py          # FastAPI app, all health check logic
-├── templates/
-│   └── index.html       # Dashboard UI
-├── k8s/
-│   └── manifests.yaml   # ServiceAccount, RBAC, ConfigMap, Secret, Deployment, Service
-├── Dockerfile
-├── requirements.txt
-└── README.md
-```
-
----
-
-## Adding More Checks Later
-
-To add a new service check, add a new async function in `app/main.py`:
-
-```python
-async def check_myservice() -> dict:
-    checks = {}
-    try:
-        # your check logic
-        checks["Connection"] = {"status": "ok", "detail": "Connected"}
-    except Exception as e:
-        checks["Connection"] = {"status": "error", "detail": str(e)}
-    return checks
-```
-
-Then add it to `run_all_checks()` and add its metadata to `SECTIONS_META` in `index.html`.
-
----
-
-## Notes
-
-- The pod uses a **ClusterRole** with read-only access to pods and nodes.
-- All sensitive values go in the **Secret**, not the ConfigMap.
-- The service is **ClusterIP** only — no external exposure. Always access via port-forward.
-- This is designed to be **completely separate** from your main application stack.
+| Method | Route                          | Used by              |
+|--------|--------------------------------|----------------------|
+| GET    | `/healthwatch/api/status`      | Auto-refresh, polling|
+| POST   | `/healthwatch/api/run`         | Run button           |
+| GET    | `/healthwatch/api/topic/{name}`| Topic inspect        |
+| GET    | `/healthwatch/api/kafka/topics`| (available)          |
