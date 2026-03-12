@@ -337,7 +337,9 @@ async def check_clickhouse_tables() -> dict:
             "WHERE engine LIKE '%MergeTree%' AND toUInt32(ttl_field)=0 "
             "AND database NOT IN ('system','information_schema','INFORMATION_SCHEMA')")
         no_ttl = [{"database":r[0],"table":r[1]} for r in r15]
-        if no_ttl: logger.warning(f"[ch_tables] tables without TTL: {[f'{t[\"database\"]}.{t[\"table\"]}' for t in no_ttl]}")
+        if no_ttl:
+            _names = [t["database"] + "." + t["table"] for t in no_ttl]
+            logger.warning(f"[ch_tables] tables without TTL: {_names}")
 
         r16 = q("Q16_detached_parts",
             "SELECT database,table,reason,count() FROM system.detached_parts "
@@ -349,7 +351,8 @@ async def check_clickhouse_tables() -> dict:
             "SELECT database,table,formatReadableSize(sum(bytes_on_disk)),sum(bytes_on_disk) "
             "FROM system.parts WHERE active=1 GROUP BY database,table ORDER BY 4 DESC LIMIT 5")
         table_sizes = [{"database":r[0],"table":r[1],"size":r[2],"bytes":r[3]} for r in r17]
-        logger.info(f"[ch_tables] top tables: {[f'{t[\"database\"]}.{t[\"table\"]}={t[\"size\"]}' for t in table_sizes]}")
+        _sz = [t["database"] + "." + t["table"] + "=" + t["size"] for t in table_sizes]
+        logger.info(f"[ch_tables] top tables: {_sz}")
 
         r18 = q("Q18_stuck_repl",
             f"SELECT database,table,type,num_postponed FROM system.replication_queue "
