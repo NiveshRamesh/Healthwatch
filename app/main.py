@@ -28,7 +28,7 @@ logger = logging.getLogger("healthwatch")
 # ─── Config ──────────────────────────────────────────────────────────────────
 K8S_NAMESPACE = os.getenv("K8S_NAMESPACE", "vsmaps")
 CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "clickhouse.vsmaps.svc.cluster.local")
-CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_PORT", "9000"))
+CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_PORT", "8123"))
 CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "default")
 CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "")
 CLICKHOUSE_DB = os.getenv("CLICKHOUSE_DB", "vusmart")
@@ -111,7 +111,13 @@ def _get_ch():
 
 
 def _milli_to_cores(v: str) -> float:
-    return int(v[:-1]) / 1000 if v.endswith("m") else float(v)
+    if v.endswith("n"):
+        return int(v[:-1]) / 1_000_000_000
+    if v.endswith("u"):
+        return int(v[:-1]) / 1_000_000
+    if v.endswith("m"):
+        return int(v[:-1]) / 1000
+    return float(v)
 
 
 def _mem_to_bytes(v: str) -> int:
@@ -1164,6 +1170,13 @@ async def health():
     return {"status": "ok", "last_checked": last_checked, "is_running": is_running}
 
 
+import mimetypes
+
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
+mimetypes.add_type("image/svg+xml", ".svg")
+mimetypes.add_type("application/json", ".json")
+
 if BUILD_DIR.exists():
     app.mount(
         "/static", StaticFiles(directory=str(BUILD_DIR / "static")), name="static"
@@ -1171,4 +1184,7 @@ if BUILD_DIR.exists():
 
     @app.get("/{full_path:path}")
     async def serve_react(full_path: str):
+        file_path = BUILD_DIR / full_path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(str(file_path))
         return FileResponse(str(BUILD_DIR / "index.html"))
