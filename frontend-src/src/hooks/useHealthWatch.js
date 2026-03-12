@@ -3,23 +3,21 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 const BASE = '/healthwatch';
 
 export function useHealthWatch() {
-  const [data, setData]       = useState(null);
+  const [data,    setData]    = useState(null);
   const [running, setRunning] = useState(false);
   const pollRef               = useRef(null);
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch(`${BASE}/api/status`);
+      const res  = await fetch(`${BASE}/api/status`);
       const json = await res.json();
       setData(json);
       setRunning(json.is_running || false);
       return json;
-    } catch (e) {
-      console.error('fetchStatus error', e);
-    }
+    } catch (e) { console.error('fetchStatus error', e); }
   }, []);
 
-  const stopPolling = useCallback(() => {
+  const stopPolling  = useCallback(() => {
     if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
   }, []);
 
@@ -33,7 +31,7 @@ export function useHealthWatch() {
 
   const triggerRun = useCallback(async () => {
     setRunning(true);
-    await fetch(`${BASE}/api/run`, { method: 'POST' });
+    await fetch(`${BASE}/api/run`, { method:'POST' });
     startPolling();
   }, [startPolling]);
 
@@ -42,12 +40,9 @@ export function useHealthWatch() {
     return res.json();
   }, []);
 
-  // Initial load + passive 30s refresh
   useEffect(() => {
     fetchStatus().then(d => { if (d?.is_running) startPolling(); });
-    const passive = setInterval(() => {
-      if (!pollRef.current) fetchStatus();
-    }, 30000);
+    const passive = setInterval(() => { if (!pollRef.current) fetchStatus(); }, 30000);
     return () => { clearInterval(passive); stopPolling(); };
   }, [fetchStatus, startPolling, stopPolling]);
 

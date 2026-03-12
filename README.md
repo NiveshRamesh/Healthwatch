@@ -1,170 +1,165 @@
-# HealthWatch — React Migration Guide
+# HealthWatch Phase 2 — Local Run Guide
 
-## New Project Structure
+Complete implementation of all 22 checks from the vuHealth Go script.
 
-```
-D:\Vumonitor\files\
-├── app/
-│   └── main.py                ← FastAPI backend (edit per BACKEND_CHANGES.py)
-├── frontend-src/              ← React source (NEW — rename from healthwatch-react)
-│   ├── public/
-│   │   └── index.html
-│   ├── src/
-│   │   ├── index.js
-│   │   ├── index.css
-│   │   ├── App.jsx
-│   │   ├── utils.js
-│   │   ├── hooks/
-│   │   │   └── useHealthWatch.js
-│   │   └── components/
-│   │       ├── CheckRow.jsx
-│   │       ├── ConsumerLagPanel.jsx
-│   │       ├── LiveDataPanel.jsx
-│   │       ├── Modal.jsx
-│   │       ├── ServiceSection.jsx
-│   │       ├── TopicDiagBar.jsx
-│   │       └── Tooltip.jsx
-│   └── package.json
-├── requirements.txt
-└── Dockerfile                 ← Updated (multi-stage build)
-```
+## What's New vs Phase 1
 
-## Files to REMOVE from old project
+| Section | New Checks |
+|---|---|
+| **Kafka** | #1 Connector state (cp-kafka-connect pod + enrichment-connector) |
+| **Longhorn** | #2 Volume actual size, #3 Volume state/ready, #4 Node disk usage |
+| **Pods/PVCs** | #5 PVC disk %, #6 Resource limits, #7 Restart count, #8 Container state, #9 PVC phase, #10 Orphan PVC |
+| **ClickHouse** | #11 Unused Kafka tables, #12 Read-only tables, #13 Inactive DDL queries, #14 Long mutations, #15 No TTL, #16 Detached parts, #17 Table sizes, #18 Replication stuck, #19 Replica inconsistency |
+| **Kubernetes** | #20 Node CPU+Memory, #21 Pod CPU+Memory |
 
-| File/Folder       | Why                                      |
-|-------------------|------------------------------------------|
-| `templates/`      | Entire folder — replaced by React        |
-| `templates/index.html` | Replaced by React build             |
+---
 
-## Files to ADD
+## Prerequisites
 
-| File/Folder       | What                                     |
-|-------------------|------------------------------------------|
-| `frontend-src/`   | Entire React source from this package    |
-| `Dockerfile`      | Replace old Dockerfile with new one      |
+```bash
+# Python 3.11+
+python --version
 
-## Changes to app/main.py
-
-Open `app/main.py` and make these edits:
-
-### 1. Replace old imports (top of file)
-```python
-# REMOVE:
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-
-# ADD:
-from fastapi.responses import FileResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-```
-
-### 2. Add CORS middleware (right after `app = FastAPI(...)`)
-```python
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-```
-
-### 3. Remove Jinja setup
-```python
-# REMOVE these two lines:
-templates = Jinja2Templates(directory="templates")
-
-@app.get("/", response_class=HTMLResponse)
-async def root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
-```
-
-### 4. Add static file serving + catch-all (at the bottom, after all /api routes)
-```python
-app.mount("/static", StaticFiles(directory="frontend/static"), name="static")
-
-@app.get("/{full_path:path}")
-async def serve_react(full_path: str):
-    return FileResponse("frontend/index.html")
-```
-
-### 5. Update requirements.txt — add this line
-```
-python-multipart
+# Node 18+
+node --version
 ```
 
 ---
 
-## Running Locally from VS Code
+## Step 1 — Backend (FastAPI)
 
-### Prerequisites (install once)
-- Node.js 20+: https://nodejs.org
-- Python 3.11+: already have it
-- VS Code with Python extension
-
-### Step 1 — Start the FastAPI backend
-
-Open a terminal in VS Code (`Ctrl+`` `):
 ```bash
-cd D:\Vumonitor\files
+# From the project root (healthwatch-phase2/)
 
-# Install Python deps if needed
-pip install -r requirements.txt
+# Create venv
+python -m venv venv
+source venv/bin/activate       # Windows: venv\Scripts\activate
 
-# Run FastAPI
-uvicorn app.main:app --host 0.0.0.0 --port 8080 --reload
+# Install deps
+pip install fastapi uvicorn httpx
+
+# Run
+uvicorn app.main:app --reload --port 8081
 ```
-Backend runs at: http://localhost:8080
 
-### Step 2 — Start the React frontend
+Backend runs at: http://localhost:8081
+API status:      http://localhost:8081/healthwatch/api/status
 
-Open a SECOND terminal in VS Code:
+---
+
+## Step 2 — Frontend (React)
+
 ```bash
-cd D:\Vumonitor\files\frontend-src
+# In a new terminal
+cd frontend
 
-# Install Node deps (first time only)
 npm install
 
-# Start React dev server
 npm start
 ```
-React runs at: http://localhost:3000
-It auto-proxies all `/healthwatch/api/*` calls to port 8080 (via `"proxy"` in package.json).
 
-### Step 3 — Open in browser
+Frontend runs at: http://localhost:3000
+
+The `proxy` in package.json routes `/healthwatch/*` → `http://localhost:8081`
+so no CORS issues in dev.
+
+---
+
+## Step 3 — Open the UI
+
 Go to: **http://localhost:3000**
 
-Hot reload works — edit any `.jsx` file and browser updates instantly. No rebuild needed.
+Click **▶ RUN DIAGNOSTICS** to see all checks populate.
+
+The UI uses mock data by default — every check is fully visible and interactive.
 
 ---
 
-## Deploying (Docker — same as before)
+## Project Structure
 
-```cmd
-cd D:\Vumonitor\files
-
-docker build -t healthwatch:latest .
-docker save healthwatch:latest -o healthwatch.tar
-scp healthwatch.tar ubuntu@<server>:~/
-ssh ubuntu@<server>
-sudo ctr -n k8s.io images import ~/healthwatch.tar
-helm upgrade healthwatch . -n vsmaps
-kubectl rollout restart deployment/healthwatch -n vsmaps
+```
+healthwatch-phase2/
+├── app/
+│   └── main.py              ← FastAPI backend (all 22 checks)
+├── frontend/
+│   ├── public/index.html
+│   ├── package.json          ← proxy to :8081
+│   └── src/
+│       ├── App.jsx            ← main layout, section ordering
+│       ├── index.css          ← design tokens (unchanged)
+│       ├── utils.js           ← SECTIONS_META + new sections
+│       ├── hooks/
+│       │   └── useHealthWatch.js
+│       └── components/
+│           ├── Shared.jsx           ← Badge, ProgressBar, SubSection, Chip, Tip
+│           ├── ServiceSection.jsx   ← routes svcKey → correct panel
+│           ├── ClickHousePanel.jsx  ← 3 existing + 9 new CH checks
+│           ├── KafkaPanel.jsx       ← existing + connector sub-panel
+│           ├── KubernetesPanel.jsx  ← existing pods + node/pod resource panels
+│           ├── LonghornPanel.jsx    ← NEW: volumes + node disk (checks 2-4)
+│           ├── PodsPVCsPanel.jsx    ← NEW: pod health + PVC status (checks 5-10)
+│           ├── CheckRow.jsx         ← unchanged
+│           ├── TopicDiagBar.jsx     ← unchanged
+│           ├── LiveDataPanel.jsx    ← unchanged
+│           ├── ConsumerLagPanel.jsx ← unchanged
+│           ├── Modal.jsx            ← unchanged
+│           └── Tooltip.jsx          ← unchanged
+└── requirements.txt
 ```
 
-The Dockerfile now does a multi-stage build:
-1. Stage 1: `npm run build` → produces optimized React files
-2. Stage 2: Copies build output into Python image at `./frontend/`
-3. FastAPI serves `frontend/index.html` for all non-API routes
+---
+
+## Mock vs Real
+
+All checks in `app/main.py` have a `# ── MOCK ──` section.
+
+To connect to real infrastructure, replace the mock block with the real K8s/CH call.
+Each function has a docstring describing exactly what the real implementation does.
+
+### Example — replace mock with real ClickHouse:
+```python
+async def check_clickhouse_tables() -> dict:
+    # Remove mock block, uncomment real code:
+    import clickhouse_connect
+    c = clickhouse_connect.get_client(host=CLICKHOUSE_HOST, ...)
+    count = c.query("SELECT count(*) FROM system.kafka_consumers ...").result_rows[0][0]
+    ...
+```
 
 ---
 
-## API routes (no changes needed in backend)
+## Environment Variables
 
-| Method | Route                          | Used by              |
-|--------|--------------------------------|----------------------|
-| GET    | `/healthwatch/api/status`      | Auto-refresh, polling|
-| POST   | `/healthwatch/api/run`         | Run button           |
-| GET    | `/healthwatch/api/topic/{name}`| Topic inspect        |
-| GET    | `/healthwatch/api/kafka/topics`| (available)          |
+```bash
+# Kafka
+KAFKA_REQUIRED_CONNECTORS=enrichment-connector
+
+# K8s node/pod resource thresholds
+NODE_CPU_WARN_THRESHOLD=70
+NODE_MEM_WARN_THRESHOLD=80
+POD_CPU_WARN_THRESHOLD=70
+POD_MEM_WARN_THRESHOLD=80
+
+# Longhorn
+LH_ACTUAL_THRESHOLD=0.7       # volume size alert at 70% of csize
+LH_NODE_FREE_THRESHOLD=0.5    # node disk alert at 50% scheduled/available
+
+# PVC/Pod
+PVC_USED_THRESHOLD=0.8
+POD_RESTART_THRESHOLD=10
+
+# ClickHouse
+CH_MUTATION_AGE_MINUTES=30
+CH_REPLICATION_POSTPONE_LIMIT=100
+CH_CLUSTER_NAME=vusmart
+```
+
+---
+
+## Deploying to Server (after local testing)
+
+1. Copy `app/main.py` → `D:\Vumonitor\files\app\main.py`
+2. Copy all `frontend/src/` changes → `D:\Vumonitor\files\frontend\src\`
+3. Update `helm-charts/healthwatch/templates/configmap.yaml` with new env vars
+4. Update `helm-charts/healthwatch/templates/rbac.yaml` with new RBAC rules
+5. Run Jenkins pipeline as normal
