@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from datetime import datetime
-import asyncio, os, logging, json, subprocess, traceback, time
+import asyncio, os, logging, traceback, time
 from pathlib import Path
 
 # ─── Logging setup ───────────────────────────────────────────────────────────
@@ -27,10 +27,7 @@ logger = logging.getLogger("healthwatch")
 
 # ─── Config ──────────────────────────────────────────────────────────────────
 K8S_NAMESPACE = os.getenv("K8S_NAMESPACE", "vsmaps")
-CLICKHOUSE_HOST = os.getenv(
-    "CLICKHOUSE_HOST",
-    "chi-clickhouse-vusmart-0.chi-clickhouse-vusmart.vsmaps.svc.cluster.local",
-)
+CLICKHOUSE_HOST = os.getenv("CLICKHOUSE_HOST", "clickhouse.vsmaps.svc.cluster.local")
 CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_PORT", "9000"))
 CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "default")
 CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "")
@@ -40,6 +37,9 @@ LONGHORN_URL = os.getenv(
 )
 KAFKA_REQUIRED_CONNECTORS = os.getenv(
     "KAFKA_REQUIRED_CONNECTORS", "enrichment-connector"
+)
+KAFKA_CONNECT_URL = os.getenv(
+    "KAFKA_CONNECT_URL", "http://connect.vsmaps.svc.cluster.local:9082"
 )
 NODE_CPU_WARN_THRESHOLD = float(os.getenv("NODE_CPU_WARN_THRESHOLD", "70"))
 NODE_MEM_WARN_THRESHOLD = float(os.getenv("NODE_MEM_WARN_THRESHOLD", "80"))
@@ -56,13 +56,13 @@ MONITORED_PODS = os.getenv(
     "MONITORED_PODS",
     "denver,nairobi,broker,kafka-cluster-cp-zookeeper,chi-clickhouse,postgresql,minio-tenant,keycloak,traefik",
 ).split(",")
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgresql.vsmaps.svc.cluster.local")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "timescaledb.vsmaps.svc.cluster.local")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
 POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
 POSTGRES_DB = os.getenv("POSTGRES_DB", "postgres")
 MINIO_ENDPOINT = os.getenv(
-    "MINIO_ENDPOINT", "http://minio.vsmaps.svc.cluster.local:9000"
+    "MINIO_ENDPOINT", "http://minio-tenant.vsmaps.svc.cluster.local:9000"
 )
 
 # ─── State ───────────────────────────────────────────────────────────────────
@@ -137,78 +137,44 @@ def _timed(name: str, t0: float):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CHECK 1 — KAFKA CONNECTOR STATE
+# CHECK 1 — KAFKA CONNECTOR STATE (via HTTP REST API, no kubectl exec needed)
 # ═══════════════════════════════════════════════════════════════════════════════
 async def check_kafka_connectors() -> dict:
     t0 = time.time()
     logger.info(
-        f"[kafka_connectors] START ns={K8S_NAMESPACE} required={KAFKA_REQUIRED_CONNECTORS}"
+        f"[kafka_connectors] START url={KAFKA_CONNECT_URL} required={KAFKA_REQUIRED_CONNECTORS}"
     )
-    try:
-        core, _, _ = _get_k8s()
-        pods = core.list_namespaced_pod(
-            namespace=K8S_NAMESPACE, label_selector="app=cp-kafka-connect"
-        ).items
-        logger.info(f"[kafka_connectors] found {len(pods)} cp-kafka-connect pod(s)")
+    import httpx
 
-        if not pods:
-            logger.warning("[kafka_connectors] no pod found → critical")
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            resp = await c.get(f"{KAFKA_CONNECT_URL}/connectors")
+        logger.info(f"[kafka_connectors] HTTP {resp.status_code}")
+        if resp.status_code != 200:
+            logger.error(f"[kafka_connectors] bad status body: {resp.text[:200]}")
             _timed("kafka_connectors", t0)
             return {
-                "pod_status": "Missing",
+                "pod_status": "Error",
                 "active": [],
                 "required": [],
                 "missing": [],
-                "status": "critical",
-                "detail": "No cp-kafka-connect pod found",
+                "status": "error",
+                "detail": f"Connect API returned HTTP {resp.status_code}",
             }
-
-        pod_name = pods[0].metadata.name
-        pod_status = pods[0].status.phase
-        logger.info(f"[kafka_connectors] pod={pod_name} phase={pod_status}")
-
-        cmd = [
-            "kubectl",
-            "exec",
-            pod_name,
-            "-n",
-            K8S_NAMESPACE,
-            "--",
-            "curl",
-            "-s",
-            "localhost:9082/connectors",
-        ]
-        logger.debug(f"[kafka_connectors] exec: {' '.join(cmd)}")
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
-        if res.returncode != 0:
-            logger.warning(
-                f"[kafka_connectors] exec rc={res.returncode} stderr={res.stderr.strip()!r}"
-            )
-        logger.debug(f"[kafka_connectors] stdout={res.stdout.strip()!r}")
-
-        try:
-            active = json.loads(res.stdout.strip()) if res.returncode == 0 else []
-        except json.JSONDecodeError as je:
-            logger.error(
-                f"[kafka_connectors] JSON parse error: {je} raw={res.stdout.strip()!r}"
-            )
-            active = []
-
+        active = resp.json()
         required = [c.strip() for c in KAFKA_REQUIRED_CONNECTORS.split(",")]
         missing = [c for c in required if c not in active]
         logger.info(
             f"[kafka_connectors] active={active} required={required} missing={missing}"
         )
-        status = (
-            "critical" if pod_status != "Running" else ("warn" if missing else "ok")
-        )
+        status = "warn" if missing else "ok"
         detail = f"{len(active)} connectors active" + (
             f" | MISSING: {missing}" if missing else ""
         )
         logger.info(f"[kafka_connectors] status={status}")
         _timed("kafka_connectors", t0)
         return {
-            "pod_status": pod_status,
+            "pod_status": "Running",
             "active": active,
             "required": required,
             "missing": missing,
@@ -285,10 +251,10 @@ async def check_longhorn() -> dict:
         )
         logger.debug(
             f"[longhorn] vol={v['name']} state={state} ready={ready} "
-            f"{round(ab / 1024**3, 1)}GiB/{round(cb / 1024**3, 1)}GiB → {status}"
+            f"{round(ab / 1024**3, 1)}GiB/{round(cb / 1024**3, 1)}GiB -> {status}"
         )
         if status != "ok":
-            logger.warning(f"[longhorn] vol={v['name']} → {status}")
+            logger.warning(f"[longhorn] vol={v['name']} -> {status}")
         vol_results.append(
             {
                 "name": v["name"],
@@ -315,7 +281,7 @@ async def check_longhorn() -> dict:
             )
             logger.debug(
                 f"[longhorn] node={n['name']} disk={did} "
-                f"sched={round(sc / 1024**3, 1)}GiB max={round(mx / 1024**3, 1)}GiB → {status}"
+                f"sched={round(sc / 1024**3, 1)}GiB max={round(mx / 1024**3, 1)}GiB -> {status}"
             )
             node_results.append(
                 {
@@ -383,17 +349,17 @@ async def check_pvc_and_pods() -> dict:
             )
             restarts = c.restart_count or 0
             if restarts > POD_RESTART_THRESHOLD:
-                alerts.append(f"⚠ {c.name}: {restarts} restarts")
+                alerts.append(f"! {c.name}: {restarts} restarts")
                 logger.warning(
                     f"[pods_pvcs] pod={pod.metadata.name} c={c.name} restarts={restarts}"
                 )
             if state != "running":
-                alerts.append(f"⚠ {c.name}: state={state}")
+                alerts.append(f"! {c.name}: state={state}")
                 logger.warning(
                     f"[pods_pvcs] pod={pod.metadata.name} c={c.name} state={state}"
                 )
             if not cpu_lim or not mem_lim:
-                alerts.append(f"⚠ {c.name}: missing resource limits")
+                alerts.append(f"! {c.name}: missing resource limits")
                 logger.warning(
                     f"[pods_pvcs] pod={pod.metadata.name} c={c.name} missing limits"
                 )
@@ -419,7 +385,7 @@ async def check_pvc_and_pods() -> dict:
             )
         )
         if phase not in ("Running", "Succeeded"):
-            logger.warning(f"[pods_pvcs] pod={pod.metadata.name} phase={phase} → {s}")
+            logger.warning(f"[pods_pvcs] pod={pod.metadata.name} phase={phase} -> {s}")
         pod_results.append(
             {
                 "name": pod.metadata.name,
@@ -445,7 +411,7 @@ async def check_pvc_and_pods() -> dict:
         )
         if s != "ok":
             logger.warning(
-                f"[pods_pvcs] PVC={name} phase={phase} orphan={orphan} → {s}"
+                f"[pods_pvcs] PVC={name} phase={phase} orphan={orphan} -> {s}"
             )
         pvc_results.append(
             {
@@ -703,7 +669,7 @@ async def check_kubernetes_resources() -> dict:
             )
             logger.info(
                 f"[k8s_resources] node={name} cpu={cp:.1f}% mem={mp:.1f}% "
-                f"({round(mem_used / 1024**3, 1)}/{round(mem_total / 1024**3, 1)} GiB) → {s}"
+                f"({round(mem_used / 1024**3, 1)}/{round(mem_total / 1024**3, 1)} GiB) -> {s}"
             )
             node_resources.append(
                 {
@@ -758,11 +724,11 @@ async def check_kubernetes_resources() -> dict:
             )
             if s != "ok":
                 logger.warning(
-                    f"[k8s_resources] pod={pname} cpu={cp:.1f}% mem={mp:.1f}% → {s}"
+                    f"[k8s_resources] pod={pname} cpu={cp:.1f}% mem={mp:.1f}% -> {s}"
                 )
             else:
                 logger.debug(
-                    f"[k8s_resources] pod={pname} cpu={cp:.1f}% mem={mp:.1f}% → ok"
+                    f"[k8s_resources] pod={pname} cpu={cp:.1f}% mem={mp:.1f}% -> ok"
                 )
             pod_resources.append(
                 {
@@ -842,13 +808,13 @@ async def check_kafka() -> dict:
         br = [p for p in bp if p.status.phase == "Running"]
         bs = "ok" if br else "error"
         bd = f"cp-kafka-0 · {len(br)}/{len(bp)} Running" if bp else "No broker pods"
-        logger.info(f"[kafka] brokers={len(bp)} running={len(br)} → {bs}")
+        logger.info(f"[kafka] brokers={len(bp)} running={len(br)} -> {bs}")
         zp = core.list_namespaced_pod(
             namespace=K8S_NAMESPACE, label_selector="app=cp-zookeeper"
         ).items
         zr = [p for p in zp if p.status.phase == "Running"]
         zs = "ok" if zr else "warn"
-        logger.info(f"[kafka] zookeeper={len(zp)} running={len(zr)} → {zs}")
+        logger.info(f"[kafka] zookeeper={len(zp)} running={len(zr)} -> {zs}")
         connectors = await check_kafka_connectors()
         _timed("kafka", t0)
         return {
@@ -979,7 +945,7 @@ async def check_kubernetes_pods() -> dict:
                 s = "warn"
             detail = f"{matched[0].metadata.name} — {matched[0].status.phase}, {restarts} restarts"
             logger.info(
-                f"[k8s_pods] prefix={prefix!r} running={len(running)}/{len(matched)} restarts={restarts} → {s}"
+                f"[k8s_pods] prefix={prefix!r} running={len(running)}/{len(matched)} restarts={restarts} -> {s}"
             )
             checks[f"Pod: {prefix.capitalize()}"] = {"status": s, "detail": detail}
         rn = sum(
@@ -990,7 +956,7 @@ async def check_kubernetes_pods() -> dict:
             )
         )
         ns = "ok" if rn == len(all_nodes) else "warn"
-        logger.info(f"[k8s_pods] nodes ready={rn}/{len(all_nodes)} → {ns}")
+        logger.info(f"[k8s_pods] nodes ready={rn}/{len(all_nodes)} -> {ns}")
         checks["Cluster Nodes"] = {
             "status": ns,
             "detail": f"{rn}/{len(all_nodes)} nodes Ready",
@@ -1111,7 +1077,7 @@ async def log_requests(request: Request, call_next):
     t0 = time.time()
     resp = await call_next(request)
     logger.debug(
-        f"HTTP {request.method} {request.url.path} → {resp.status_code} ({round(time.time() - t0, 3)}s)"
+        f"HTTP {request.method} {request.url.path} -> {resp.status_code} ({round(time.time() - t0, 3)}s)"
     )
     return resp
 
@@ -1124,6 +1090,7 @@ async def startup():
     logger.info(f"  LONGHORN_URL={LONGHORN_URL}")
     logger.info(f"  MINIO_ENDPOINT={MINIO_ENDPOINT}")
     logger.info(f"  POSTGRES={POSTGRES_HOST}:{POSTGRES_PORT}  db={POSTGRES_DB}")
+    logger.info(f"  KAFKA_CONNECT_URL={KAFKA_CONNECT_URL}")
     logger.info(f"  KAFKA_REQUIRED={KAFKA_REQUIRED_CONNECTORS}")
     logger.info(
         f"  NODE thresholds cpu>{NODE_CPU_WARN_THRESHOLD}% mem>{NODE_MEM_WARN_THRESHOLD}%"
