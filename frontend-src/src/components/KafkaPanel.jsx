@@ -61,10 +61,34 @@ function CheckRow({ name, check, onExpandLive, onExpandLag, onInspect, details }
   );
 }
 
+/* ── Connector state chip colours ───────────────────────────────── */
+const STATE_STYLE = {
+  RUNNING:     { color:'var(--ok)',   bg:'rgba(16,185,129,0.1)',  border:'rgba(16,185,129,0.3)'  },
+  PAUSED:      { color:'var(--warn)', bg:'rgba(245,158,11,0.1)',  border:'rgba(245,158,11,0.3)'  },
+  STOPPED:     { color:'var(--warn)', bg:'rgba(245,158,11,0.1)',  border:'rgba(245,158,11,0.3)'  },
+  FAILED:      { color:'var(--error)',bg:'rgba(239,68,68,0.1)',   border:'rgba(239,68,68,0.3)'   },
+  MISSING:     { color:'var(--error)',bg:'rgba(239,68,68,0.1)',   border:'rgba(239,68,68,0.3)'   },
+  UNREACHABLE: { color:'var(--error)',bg:'rgba(239,68,68,0.1)',   border:'rgba(239,68,68,0.3)'   },
+  UNASSIGNED:  { color:'var(--warn)', bg:'rgba(245,158,11,0.1)',  border:'rgba(245,158,11,0.3)'  },
+  UNKNOWN:     { color:'var(--muted)',bg:'rgba(255,255,255,0.05)',border:'rgba(255,255,255,0.1)' },
+};
+
+function StateChip({ state }) {
+  const s = STATE_STYLE[state] || STATE_STYLE.UNKNOWN;
+  return (
+    <span style={{
+      fontFamily:'var(--mono)', fontSize:'0.62rem', fontWeight:700,
+      color:s.color, background:s.bg, border:`1px solid ${s.border}`,
+      borderRadius:4, padding:'1px 7px', letterSpacing:'0.4px',
+    }}>{state}</span>
+  );
+}
+
 /* ── Connector row — inline in Kafka section ─────────────────────── */
-function ConnectorSubPanel({ connectors }) {
-  if (!connectors) return null;
-  const { pod_status, active = [], required = [], missing = [], status } = connectors;
+function ConnectorSubPanel({ connectors: data }) {
+  if (!data) return null;
+  const { connectors = [], status, problems = [] } = data;
+  const problemCount = problems.length;
 
   return (
     <SubSection
@@ -72,65 +96,59 @@ function ConnectorSubPanel({ connectors }) {
       defaultOpen={true}
       badge={
         <span style={{ display:'flex', gap:4 }}>
-          {missing.length > 0 && <Chip n={missing.length} color="239,68,68" label="missing" />}
+          {problemCount > 0 && <Chip n={problemCount} color="239,68,68" label="problem" />}
           <Badge status={status} size="sm" />
         </span>
       }
     >
-      {/* Pod status */}
-      <div style={{ padding:'8px 22px 8px 24px', borderBottom:'1px solid rgba(30,45,69,0.4)',
-        display:'flex', alignItems:'center', gap:8 }}>
-        <span style={{ fontSize:'0.75rem', color:'var(--muted)' }}>cp-kafka-connect pod</span>
-        <span style={{ fontFamily:'var(--mono)', fontSize:'0.65rem',
-          color: pod_status === 'Running' ? 'var(--ok)' : 'var(--error)',
-          background: pod_status === 'Running' ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)',
-          border: pod_status === 'Running' ? '1px solid rgba(16,185,129,0.3)' : '1px solid rgba(239,68,68,0.3)',
-          borderRadius:4, padding:'1px 7px' }}>
-          {pod_status}
-        </span>
-      </div>
-
-      {/* Active connectors */}
-      {active.map((c, i) => {
-        const isMissing  = false; // active = present
-        const isRequired = required.includes(c);
+      {connectors.map((conn) => {
+        const tasks = conn.tasks || [];
+        const failedTasks = tasks.filter(t => t.state !== 'RUNNING');
         return (
-          <div key={i} style={{
-            display:'flex', alignItems:'center', justifyContent:'space-between',
-            padding:'8px 22px 8px 24px', borderBottom:'1px solid rgba(30,45,69,0.3)',
-          }}
-            onMouseEnter={e => e.currentTarget.style.background='var(--surface2)'}
-            onMouseLeave={e => e.currentTarget.style.background='transparent'}
-          >
-            <div style={{ display:'flex', alignItems:'center', gap:7 }}>
-              <span style={{ fontFamily:'var(--mono)', fontSize:'0.72rem' }}>{c}</span>
-              {isRequired && (
-                <span style={{ fontFamily:'var(--mono)', fontSize:'0.58rem', color:'var(--accent)',
-                  background:'rgba(0,212,170,0.1)', border:'1px solid rgba(0,212,170,0.25)',
-                  borderRadius:3, padding:'0px 5px' }}>required</span>
-              )}
+          <div key={conn.name} style={{
+            borderBottom:'1px solid rgba(30,45,69,0.4)',
+            background: conn.status !== 'ok' ? `rgba(${conn.status === 'warn' ? '245,158,11' : '239,68,68'},0.03)` : 'transparent',
+          }}>
+            {/* Connector header row */}
+            <div style={{
+              display:'flex', alignItems:'center', justifyContent:'space-between',
+              padding:'9px 22px 9px 24px',
+            }}
+              onMouseEnter={e => e.currentTarget.style.background='var(--surface2)'}
+              onMouseLeave={e => e.currentTarget.style.background='transparent'}
+            >
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <span style={{ fontFamily:'var(--mono)', fontSize:'0.75rem' }}>{conn.name}</span>
+                <StateChip state={conn.connector_state} />
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:8 }}>
+                <span style={{ fontFamily:'var(--mono)', fontSize:'0.68rem', color:'var(--muted)' }}>
+                  {conn.detail}
+                </span>
+                <Badge status={conn.status} size="sm" />
+              </div>
             </div>
-            <Badge status="ok" label="ACTIVE" size="sm" />
+
+            {/* Task rows — only shown when something is wrong */}
+            {(conn.connector_state !== 'MISSING' && conn.connector_state !== 'UNREACHABLE') && tasks.length > 0 && failedTasks.length > 0 && (
+              <div style={{ paddingLeft:40, paddingBottom:6 }}>
+                {tasks.map(t => (
+                  <div key={t.id} style={{
+                    display:'flex', alignItems:'center', gap:8,
+                    padding:'3px 22px 3px 0', fontSize:'0.68rem', fontFamily:'var(--mono)',
+                  }}>
+                    <span style={{ color:'var(--muted)' }}>task[{t.id}]</span>
+                    <StateChip state={t.state} />
+                    {t.worker_id && (
+                      <span style={{ color:'var(--muted)', fontSize:'0.62rem' }}>{t.worker_id}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         );
       })}
-
-      {/* Missing connectors */}
-      {missing.map((c, i) => (
-        <div key={i} style={{
-          display:'flex', alignItems:'center', justifyContent:'space-between',
-          padding:'8px 22px 8px 24px', borderBottom:'1px solid rgba(30,45,69,0.3)',
-          background:'rgba(239,68,68,0.04)',
-        }}>
-          <div style={{ display:'flex', alignItems:'center', gap:7 }}>
-            <span style={{ fontFamily:'var(--mono)', fontSize:'0.72rem', color:'var(--error)' }}>{c}</span>
-            <span style={{ fontFamily:'var(--mono)', fontSize:'0.58rem', color:'var(--error)',
-              background:'rgba(239,68,68,0.1)', border:'1px solid rgba(239,68,68,0.25)',
-              borderRadius:3, padding:'0px 5px' }}>required · missing</span>
-          </div>
-          <Badge status="error" label="MISSING" size="sm" />
-        </div>
-      ))}
     </SubSection>
   );
 }

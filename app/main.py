@@ -144,6 +144,8 @@ def _timed(name: str, t0: float):
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CHECK 1 — KAFKA CONNECTOR STATE (via HTTP REST API, no kubectl exec needed)
+# Checks each required connector's actual running state via /connectors/{name}/status
+# A connector that exists but is PAUSED/STOPPED/FAILED is reported as not healthy.
 # ═══════════════════════════════════════════════════════════════════════════════
 async def check_kafka_connectors() -> dict:
     t0 = time.time()
@@ -152,49 +154,117 @@ async def check_kafka_connectors() -> dict:
     )
     import httpx
 
+    required = [name.strip() for name in KAFKA_REQUIRED_CONNECTORS.split(",")]
+
     try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            resp = await c.get(f"{KAFKA_CONNECT_URL}/connectors")
-        logger.info(f"[kafka_connectors] HTTP {resp.status_code}")
-        if resp.status_code != 200:
-            logger.error(f"[kafka_connectors] bad status body: {resp.text[:200]}")
-            _timed("kafka_connectors", t0)
-            return {
-                "pod_status": "Error",
-                "active": [],
-                "required": [],
-                "missing": [],
-                "status": "error",
-                "detail": f"Connect API returned HTTP {resp.status_code}",
-            }
-        active = resp.json()
-        required = [c.strip() for c in KAFKA_REQUIRED_CONNECTORS.split(",")]
-        missing = [c for c in required if c not in active]
-        logger.info(
-            f"[kafka_connectors] active={active} required={required} missing={missing}"
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Fetch status for every required connector in parallel
+            status_resps = await asyncio.gather(
+                *[client.get(f"{KAFKA_CONNECT_URL}/connectors/{name}/status") for name in required],
+                return_exceptions=True,
+            )
+
+        connector_statuses = []
+        problems = []
+
+        for name, resp in zip(required, status_resps):
+            if isinstance(resp, Exception):
+                logger.error(f"[kafka_connectors] {name}: request failed — {resp}")
+                connector_statuses.append({
+                    "name": name,
+                    "connector_state": "UNREACHABLE",
+                    "tasks": [],
+                    "status": "error",
+                    "detail": str(resp),
+                })
+                problems.append(f"{name}: unreachable")
+                continue
+
+            logger.info(f"[kafka_connectors] {name}: HTTP {resp.status_code}")
+
+            if resp.status_code == 404:
+                connector_statuses.append({
+                    "name": name,
+                    "connector_state": "MISSING",
+                    "tasks": [],
+                    "status": "error",
+                    "detail": "Connector not registered",
+                })
+                problems.append(f"{name}: not found")
+                continue
+
+            if resp.status_code != 200:
+                logger.error(f"[kafka_connectors] {name}: bad status body: {resp.text[:200]}")
+                connector_statuses.append({
+                    "name": name,
+                    "connector_state": "UNKNOWN",
+                    "tasks": [],
+                    "status": "error",
+                    "detail": f"HTTP {resp.status_code}",
+                })
+                problems.append(f"{name}: HTTP {resp.status_code}")
+                continue
+
+            body = resp.json()
+            conn_state = body.get("connector", {}).get("state", "UNKNOWN")
+            tasks = body.get("tasks", [])
+            task_states = [t.get("state", "UNKNOWN") for t in tasks]
+
+            logger.info(
+                f"[kafka_connectors] {name}: connector={conn_state} tasks={task_states}"
+            )
+
+            # Connector is healthy only if connector AND all tasks are RUNNING
+            failed_tasks = [t for t in tasks if t.get("state") != "RUNNING"]
+
+            if conn_state == "RUNNING" and not failed_tasks:
+                conn_status = "ok"
+                detail = f"RUNNING — {len(tasks)} task(s) healthy"
+            elif conn_state in ("PAUSED", "STOPPED"):
+                conn_status = "warn"
+                detail = f"Connector is {conn_state}"
+                problems.append(f"{name}: {conn_state}")
+            else:
+                # FAILED, UNASSIGNED, or tasks not running
+                conn_status = "error"
+                bad = [f"task[{t['id']}]={t.get('state')}" for t in failed_tasks] if failed_tasks else []
+                detail = f"connector={conn_state}" + (f" | {', '.join(bad)}" if bad else "")
+                problems.append(f"{name}: {detail}")
+
+            connector_statuses.append({
+                "name": name,
+                "connector_state": conn_state,
+                "tasks": [{"id": t.get("id"), "state": t.get("state"), "worker_id": t.get("worker_id", "")} for t in tasks],
+                "status": conn_status,
+                "detail": detail,
+            })
+
+        overall_status = (
+            "error" if any(c["status"] == "error" for c in connector_statuses)
+            else "warn" if any(c["status"] == "warn" for c in connector_statuses)
+            else "ok"
         )
-        status = "warn" if missing else "ok"
-        detail = f"{len(active)} connectors active" + (
-            f" | MISSING: {missing}" if missing else ""
+        overall_detail = (
+            " | ".join(problems) if problems
+            else f"{len(required)} connector(s) RUNNING"
         )
-        logger.info(f"[kafka_connectors] status={status}")
+
+        logger.info(f"[kafka_connectors] overall={overall_status} problems={problems}")
         _timed("kafka_connectors", t0)
         return {
-            "pod_status": "Running",
-            "active": active,
+            "connectors": connector_statuses,
             "required": required,
-            "missing": missing,
-            "status": status,
-            "detail": detail,
+            "problems": problems,
+            "status": overall_status,
+            "detail": overall_detail,
         }
     except Exception as e:
         logger.error(f"[kafka_connectors] EXCEPTION: {e}\n{traceback.format_exc()}")
         _timed("kafka_connectors", t0)
         return {
-            "pod_status": "Error",
-            "active": [],
-            "required": [],
-            "missing": [],
+            "connectors": [],
+            "required": required,
+            "problems": [],
             "status": "error",
             "detail": str(e),
         }
