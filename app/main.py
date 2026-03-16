@@ -64,6 +64,9 @@ POSTGRES_DB = os.getenv("POSTGRES_DB", "postgres")
 MINIO_ENDPOINT = os.getenv(
     "MINIO_ENDPOINT", "http://minio-tenant.vsmaps.svc.cluster.local:9000"
 )
+ZK_POD_NAME = os.getenv("ZK_POD_NAME", "kafka-cluster-cp-zookeeper-0")
+ZK_PORT = int(os.getenv("ZK_PORT", "2181"))
+ZK_OUTSTANDING_WARN = int(os.getenv("ZK_OUTSTANDING_WARN", "10"))
 
 # ─── State ───────────────────────────────────────────────────────────────────
 last_result: dict = {}
@@ -142,8 +145,120 @@ def _timed(name: str, t0: float):
     logger.info(f"[{name}] finished in {elapsed}s")
 
 
+def _sync_exec_pod(pod_name: str, namespace: str, cmd: str) -> str:
+    """Exec a shell command inside a pod and return stdout+stderr as a string."""
+    from kubernetes.stream import stream as k8s_stream
+    core, _, _ = _get_k8s()
+    return k8s_stream(
+        core.connect_get_namespaced_pod_exec,
+        pod_name,
+        namespace,
+        command=["sh", "-c", cmd],
+        stderr=True,
+        stdin=False,
+        stdout=True,
+        tty=False,
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# CHECK 1 — KAFKA CONNECTOR STATE (via HTTP REST API, no kubectl exec needed)
+# CHECK 1 — ZOOKEEPER STATS (ruok + mntr 4-letter commands via pod exec)
+# ═══════════════════════════════════════════════════════════════════════════════
+async def check_zookeeper_stats() -> dict:
+    t0 = time.time()
+    logger.info(
+        f"[zk_stats] START pod={ZK_POD_NAME} ns={K8S_NAMESPACE} port={ZK_PORT}"
+    )
+    loop = asyncio.get_event_loop()
+    try:
+        ruok_cmd = f"echo ruok | nc -w 2 localhost {ZK_PORT}"
+        mntr_cmd = f"echo mntr | nc -w 2 localhost {ZK_PORT}"
+
+        ruok_out, mntr_out = await asyncio.gather(
+            loop.run_in_executor(None, _sync_exec_pod, ZK_POD_NAME, K8S_NAMESPACE, ruok_cmd),
+            loop.run_in_executor(None, _sync_exec_pod, ZK_POD_NAME, K8S_NAMESPACE, mntr_cmd),
+        )
+
+        logger.info(f"[zk_stats] ruok={ruok_out.strip()!r}")
+        logger.debug(f"[zk_stats] mntr raw:\n{mntr_out}")
+
+        # Parse mntr — tab-separated key\tvalue lines
+        metrics: dict = {}
+        for line in mntr_out.strip().splitlines():
+            parts = line.split("\t", 1)
+            if len(parts) == 2:
+                metrics[parts[0].strip()] = parts[1].strip()
+        logger.info(f"[zk_stats] parsed {len(metrics)} mntr keys")
+
+        ruok_ok = ruok_out.strip() == "imok"
+
+        def _int(key: str, default: int = 0) -> int:
+            try:
+                return int(metrics.get(key, default))
+            except (ValueError, TypeError):
+                return default
+
+        server_state  = metrics.get("zk_server_state", "unknown")
+        avg_latency   = _int("zk_avg_latency")
+        max_latency   = _int("zk_max_latency")
+        outstanding   = _int("zk_outstanding_requests")
+        alive_conns   = _int("zk_num_alive_connections")
+        znode_count   = _int("zk_znode_count")
+        watch_count   = _int("zk_watch_count")
+        open_fds      = _int("zk_open_file_descriptor_count")
+        max_fds       = _int("zk_max_file_descriptor_count")
+        # zk_uptime available in ZK 3.6+ (milliseconds)
+        uptime_ms     = _int("zk_uptime", 0)
+        uptime_hours  = round(uptime_ms / 3_600_000, 1) if uptime_ms else None
+
+        logger.info(
+            f"[zk_stats] state={server_state} outstanding={outstanding} "
+            f"conns={alive_conns} avg_lat={avg_latency}ms open_fds={open_fds}"
+        )
+
+        if not ruok_ok:
+            status = "error"
+            detail = "ruok check failed — ZooKeeper not responding"
+        elif outstanding > ZK_OUTSTANDING_WARN:
+            status = "warn"
+            detail = f"outstanding_requests={outstanding} (threshold {ZK_OUTSTANDING_WARN})"
+        else:
+            status = "ok"
+            detail = (
+                f"{server_state} · {alive_conns} connections · "
+                f"avg latency {avg_latency}ms"
+            )
+
+        logger.info(f"[zk_stats] status={status}")
+        _timed("zk_stats", t0)
+        return {
+            "ruok": ruok_ok,
+            "server_state": server_state,
+            "avg_latency_ms": avg_latency,
+            "max_latency_ms": max_latency,
+            "outstanding_requests": outstanding,
+            "outstanding_warn_threshold": ZK_OUTSTANDING_WARN,
+            "alive_connections": alive_conns,
+            "znode_count": znode_count,
+            "watch_count": watch_count,
+            "open_fds": open_fds,
+            "max_fds": max_fds,
+            "uptime_hours": uptime_hours,
+            "status": status,
+            "detail": detail,
+        }
+    except Exception as e:
+        logger.error(f"[zk_stats] EXCEPTION: {e}\n{traceback.format_exc()}")
+        _timed("zk_stats", t0)
+        return {
+            "ruok": False,
+            "status": "error",
+            "detail": str(e),
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CHECK 2 — KAFKA CONNECTOR STATE (via HTTP REST API, no kubectl exec needed)
 # Checks each required connector's actual running state via /connectors/{name}/status
 # A connector that exists but is PAUSED/STOPPED/FAILED is reported as not healthy.
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -891,7 +1006,10 @@ async def check_kafka() -> dict:
         zr = [p for p in zp if p.status.phase == "Running"]
         zs = "ok" if zr else "warn"
         logger.info(f"[kafka] zookeeper={len(zp)} running={len(zr)} -> {zs}")
-        connectors = await check_kafka_connectors()
+        connectors, zk_stats = await asyncio.gather(
+            check_kafka_connectors(),
+            check_zookeeper_stats(),
+        )
         _timed("kafka", t0)
         return {
             "Broker Health": {"status": bs, "detail": bd},
@@ -900,8 +1018,9 @@ async def check_kafka() -> dict:
                 "detail": f"{len(zr)}/{len(zp)} Zookeeper Running",
             },
             "Zookeeper Stats": {
-                "status": "ok",
-                "detail": "Stats exec not yet implemented",
+                "status": zk_stats["status"],
+                "detail": zk_stats["detail"],
+                "_zk_stats": zk_stats,
             },
             "Live Data": {"status": "ok", "detail": "Topic live check via CH"},
             "Consumer Lag": {
@@ -921,6 +1040,7 @@ async def check_kafka() -> dict:
         return {
             "Broker Health": {"status": "error", "detail": str(e)},
             "Zookeeper Mode": {"status": "error", "detail": "N/A"},
+            "Zookeeper Stats": {"status": "error", "detail": str(e)},
             "Kafka Connectors": {"status": "error", "detail": "N/A"},
             "__details__": {},
         }
@@ -1167,6 +1287,7 @@ async def startup():
     logger.info(f"  MINIO_ENDPOINT={MINIO_ENDPOINT}")
     logger.info(f"  POSTGRES={POSTGRES_HOST}:{POSTGRES_PORT}  db={POSTGRES_DB}")
     logger.info(f"  KAFKA_CONNECT_URL={KAFKA_CONNECT_URL}")
+    logger.info(f"  ZK_POD_NAME={ZK_POD_NAME}  ZK_PORT={ZK_PORT}  ZK_OUTSTANDING_WARN={ZK_OUTSTANDING_WARN}")
     logger.info(f"  KAFKA_REQUIRED={KAFKA_REQUIRED_CONNECTORS}")
     logger.info(
         f"  NODE thresholds cpu>{NODE_CPU_WARN_THRESHOLD}% mem>{NODE_MEM_WARN_THRESHOLD}%"

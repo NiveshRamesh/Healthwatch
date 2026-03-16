@@ -4,6 +4,7 @@ import { STATUS_ICONS } from '../utils';
 import TopicDiagBar from './TopicDiagBar';
 import LiveDataPanel from './LiveDataPanel';
 import ConsumerLagPanel from './ConsumerLagPanel';
+import ZookeeperStatsPanel from './ZookeeperStatsPanel';
 import Modal from './Modal';
 import { TopicDetail } from './TopicDiagBar';
 
@@ -162,6 +163,7 @@ export default function KafkaPanel({ checks, fetchTopic }) {
 
   const details    = checks.__details__;
   const connectors = checks['Kafka Connectors']?._connectors;
+  const zkStats    = checks['Zookeeper Stats']?._zk_stats;
 
   function openTopicModal(name) {
     setTopicModal({ open:true, name, data:null });
@@ -175,7 +177,7 @@ export default function KafkaPanel({ checks, fetchTopic }) {
 
       {/* Standard check rows */}
       {Object.entries(checks).map(([k, v]) => {
-        if (k.startsWith('__') || !v?.status || k === 'Kafka Connectors') return null;
+        if (k.startsWith('__') || !v?.status || k === 'Kafka Connectors' || k === 'Zookeeper Stats') return null;
         return (
           <CheckRow key={k} name={k} check={v} details={details}
             onExpandLive={() => setLivePanelOpen(o => !o)}
@@ -189,6 +191,16 @@ export default function KafkaPanel({ checks, fetchTopic }) {
       {livePanelOpen && <LiveDataPanel details={details} onInspect={openTopicModal} />}
       {/* Consumer lag panel */}
       {lagPanelOpen  && <ConsumerLagPanel details={details} onInspect={openTopicModal} />}
+
+      {/* Zookeeper Stats — summary row + expandable metrics panel */}
+      {checks['Zookeeper Stats'] && (
+        <CheckRow
+          key="Zookeeper Stats" name="Zookeeper Stats"
+          check={checks['Zookeeper Stats']} details={details}
+          onRestartClick={() => {}} onExpandLive={() => {}} onExpandLag={() => {}} onInspect={() => {}}
+        />
+      )}
+      <ZookeeperStatsPanel zkStats={zkStats} />
 
       {/* Connector check — new panel inline */}
       <ConnectorSubPanel connectors={connectors} />
