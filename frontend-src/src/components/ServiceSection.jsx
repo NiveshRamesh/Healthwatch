@@ -4,7 +4,6 @@ import CheckRow from './CheckRow';
 import ClickHousePanel from './ClickHousePanel';
 import KafkaPanel from './KafkaPanel';
 import KubernetesPanel from './KubernetesPanel';
-import LonghornPanel from './LonghornPanel';
 import PodsPVCsPanel from './PodsPVCsPanel';
 import Modal from './Modal';
 
@@ -36,9 +35,6 @@ export default function ServiceSection({ svcKey, meta, checks, fetchTopic }) {
 
       case 'kubernetes':
         return <KubernetesPanel checks={checks} />;
-
-      case 'longhorn':
-        return <LonghornPanel data={checks.__longhorn__} />;
 
       case 'pods_pvcs':
         return <PodsPVCsPanel data={checks.__pods_pvcs__} />;

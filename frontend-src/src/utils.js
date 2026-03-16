@@ -7,7 +7,6 @@ export const SECTIONS_META = {
   postgres:   { label:'PostgreSQL',         sub:'App DB · Metadata Store',         icon:'🐘',  cls:'postgres'   },
   minio:      { label:'MinIO',              sub:'Object Storage · Config Store',   icon:'🪣',  cls:'minio'      },
   kubernetes: { label:'Kubernetes',         sub:'Orchestration · Node Resources',  icon:'☸️',  cls:'kubernetes' },
-  longhorn:   { label:'Longhorn Storage',   sub:'Persistent Volumes · Disk Health',icon:'💾',  cls:'longhorn'   },
   pods_pvcs:  { label:'Pods & PVCs',        sub:'Container Health · Volume Claims',icon:'📦',  cls:'pods_pvcs'  },
 };
 
@@ -17,7 +16,6 @@ export const ICON_BG = {
   postgres:   'rgba(51,102,204,0.12)',
   minio:      'rgba(198,53,40,0.12)',
   kubernetes: 'rgba(50,108,229,0.12)',
-  longhorn:   'rgba(0,212,170,0.12)',
   pods_pvcs:  'rgba(139,92,246,0.12)',
 };
 
@@ -31,9 +29,8 @@ export function sectionOverallStatus(checks) {
   // Check nested __data__ blobs
   const chTables   = checks.__ch_tables__;
   const resources  = checks.__resources__;
-  const longhorn   = checks.__longhorn__;
   const podsPvcs   = checks.__pods_pvcs__;
-  for (const blob of [chTables, resources, longhorn, podsPvcs]) {
+  for (const blob of [chTables, resources, podsPvcs]) {
     if (blob?.status) all.push(blob.status);
   }
   if (all.includes('critical') || all.includes('error')) return 'error';

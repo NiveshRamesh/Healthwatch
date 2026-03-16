@@ -28,10 +28,6 @@ data:
   ZK_POD_NAME:                    {{ .Values.config.zkPodName | quote }}
   ZK_PORT:                        {{ .Values.config.zkPort | quote }}
   ZK_OUTSTANDING_WARN:            {{ .Values.config.zkOutstandingWarn | quote }}
-  # Longhorn
-  LONGHORN_URL:                   {{ .Values.config.longhornUrl | quote }}
-  LH_ACTUAL_THRESHOLD:            {{ .Values.config.lhActualThreshold | quote }}
-  LH_NODE_FREE_THRESHOLD:         {{ .Values.config.lhNodeFreeThreshold | quote }}
   # PVC
   PVC_USED_THRESHOLD:             {{ .Values.config.pvcUsedThreshold | quote }}
   # PostgreSQL

@@ -26,7 +26,7 @@ export default function App() {
   }
 
   // Section order — new sections added
-  const sectionOrder = ['clickhouse','kafka','postgres','minio','kubernetes','longhorn','pods_pvcs'];
+  const sectionOrder = ['clickhouse','kafka','postgres','minio','kubernetes','pods_pvcs'];
 
   return (
     <div style={{ position:'relative', zIndex:1, maxWidth:920, margin:'0 auto', padding:'32px 20px 60px' }}>
@@ -130,7 +130,7 @@ export default function App() {
       {/* ── Footer ── */}
       <div style={{ textAlign:'center', marginTop:48, fontFamily:'var(--mono)', fontSize:'0.72rem', color:'var(--muted)' }}>
         Auto-scheduled at <span style={{ color:'var(--accent)' }}>08:00</span> &amp; <span style={{ color:'var(--accent)' }}>20:00</span> daily &nbsp;·&nbsp;
-        22 checks · Kafka · ClickHouse · Kubernetes · Longhorn · Pods/PVCs · PostgreSQL · MinIO
+        Kafka · ClickHouse · Kubernetes · Pods/PVCs · PostgreSQL · MinIO
       </div>
     </div>
   );

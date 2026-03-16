@@ -1,6 +1,6 @@
 """
 HealthWatch Phase 2 — Production backend with full structured logging.
-All checks use real K8s API, ClickHouse, Longhorn, and Kafka.
+All checks use real K8s API, ClickHouse, Kafka, PostgreSQL, and MinIO.
 Runs inside the cluster with in-cluster kubeconfig.
 
 To view logs:
@@ -32,9 +32,6 @@ CLICKHOUSE_PORT = int(os.getenv("CLICKHOUSE_PORT", "8123"))
 CLICKHOUSE_USER = os.getenv("CLICKHOUSE_USER", "default")
 CLICKHOUSE_PASSWORD = os.getenv("CLICKHOUSE_PASSWORD", "")
 CLICKHOUSE_DB = os.getenv("CLICKHOUSE_DB", "vusmart")
-LONGHORN_URL = os.getenv(
-    "LONGHORN_URL", "http://longhorn-backend.longhorn-system.svc.cluster.local:9500"
-)
 KAFKA_REQUIRED_CONNECTORS = os.getenv(
     "KAFKA_REQUIRED_CONNECTORS", "enrichment-connector"
 )
@@ -45,8 +42,6 @@ NODE_CPU_WARN_THRESHOLD = float(os.getenv("NODE_CPU_WARN_THRESHOLD", "70"))
 NODE_MEM_WARN_THRESHOLD = float(os.getenv("NODE_MEM_WARN_THRESHOLD", "80"))
 POD_CPU_WARN_THRESHOLD = float(os.getenv("POD_CPU_WARN_THRESHOLD", "70"))
 POD_MEM_WARN_THRESHOLD = float(os.getenv("POD_MEM_WARN_THRESHOLD", "80"))
-LH_ACTUAL_THRESHOLD = float(os.getenv("LH_ACTUAL_THRESHOLD", "0.7"))
-LH_NODE_FREE_THRESHOLD = float(os.getenv("LH_NODE_FREE_THRESHOLD", "0.5"))
 PVC_USED_THRESHOLD = float(os.getenv("PVC_USED_THRESHOLD", "0.8"))
 POD_RESTART_THRESHOLD = int(os.getenv("POD_RESTART_THRESHOLD", "10"))
 CH_MUTATION_AGE_MINUTES = int(os.getenv("CH_MUTATION_AGE_MINUTES", "30"))
@@ -405,117 +400,7 @@ async def check_kafka_connectors() -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# CHECKS 2–4 — LONGHORN
-# ═══════════════════════════════════════════════════════════════════════════════
-async def check_longhorn() -> dict:
-    t0 = time.time()
-    logger.info(
-        f"[longhorn] START url={LONGHORN_URL} "
-        f"actual_thr={LH_ACTUAL_THRESHOLD} node_thr={LH_NODE_FREE_THRESHOLD}"
-    )
-    import httpx
-
-    try:
-        async with httpx.AsyncClient(timeout=15) as c:
-            vr = await c.get(f"{LONGHORN_URL}/v1/volumes")
-            nr = await c.get(f"{LONGHORN_URL}/v1/nodes")
-        logger.info(
-            f"[longhorn] /v1/volumes HTTP {vr.status_code}  /v1/nodes HTTP {nr.status_code}"
-        )
-        if vr.status_code != 200:
-            logger.error(f"[longhorn] volumes error body: {vr.text[:300]}")
-        if nr.status_code != 200:
-            logger.error(f"[longhorn] nodes error body: {nr.text[:300]}")
-        volumes_raw = vr.json().get("data", [])
-        nodes_raw = nr.json().get("data", [])
-        logger.info(f"[longhorn] {len(volumes_raw)} volumes, {len(nodes_raw)} nodes")
-    except Exception as e:
-        logger.error(f"[longhorn] EXCEPTION: {e}\n{traceback.format_exc()}")
-        _timed("longhorn", t0)
-        return {
-            "volumes": [],
-            "nodes": [],
-            "status": "error",
-            "detail": f"Longhorn unreachable: {e}",
-        }
-
-    vol_results = []
-    for v in volumes_raw:
-        ab = int(v.get("actualSize", 0))
-        cb = int(v.get("size", 1))
-        pct = ab / cb * 100 if cb > 0 else 0
-        state = v.get("state", "unknown")
-        ready = v.get("ready", False)
-        pod = next(
-            (
-                kb.get("podName")
-                for kb in v.get("kubeStatus", {}).get("workloadsStatus", [])
-                if kb.get("podStatus") == "Running"
-            ),
-            None,
-        )
-        status = (
-            "critical"
-            if (not ready or state != "attached")
-            else ("warn" if cb > 0 and ab / cb > LH_ACTUAL_THRESHOLD else "ok")
-        )
-        logger.debug(
-            f"[longhorn] vol={v['name']} state={state} ready={ready} "
-            f"{round(ab / 1024**3, 1)}GiB/{round(cb / 1024**3, 1)}GiB -> {status}"
-        )
-        if status != "ok":
-            logger.warning(f"[longhorn] vol={v['name']} -> {status}")
-        vol_results.append(
-            {
-                "name": v["name"],
-                "pod": pod,
-                "pvc": v.get("kubeStatus", {}).get("pvcName", ""),
-                "state": state,
-                "ready": ready,
-                "actual_gb": round(ab / 1024**3, 1),
-                "csize_gb": round(cb / 1024**3, 1),
-                "used_pct": round(pct, 1),
-                "status": status,
-            }
-        )
-
-    node_results = []
-    for n in nodes_raw:
-        for did, disk in n.get("disks", {}).items():
-            sc = int(disk.get("storageScheduled", 0))
-            mx = int(disk.get("storageMaximum", 1))
-            av = int(disk.get("storageAvailable", 1))
-            pct = sc / mx * 100 if mx > 0 else 0
-            status = (
-                "warn" if (sc / mx if mx > 0 else 0) > LH_NODE_FREE_THRESHOLD else "ok"
-            )
-            logger.debug(
-                f"[longhorn] node={n['name']} disk={did} "
-                f"sched={round(sc / 1024**3, 1)}GiB max={round(mx / 1024**3, 1)}GiB -> {status}"
-            )
-            node_results.append(
-                {
-                    "node": n["name"],
-                    "disk": did,
-                    "path": disk.get("path", ""),
-                    "scheduled_gb": round(sc / 1024**3, 1),
-                    "available_gb": round(av / 1024**3, 1),
-                    "used_pct": round(pct, 1),
-                    "status": status,
-                }
-            )
-
-    all_s = [v["status"] for v in vol_results] + [n["status"] for n in node_results]
-    overall = "critical" if "critical" in all_s else "warn" if "warn" in all_s else "ok"
-    logger.info(
-        f"[longhorn] overall={overall} vols={len(vol_results)} nodes={len(node_results)}"
-    )
-    _timed("longhorn", t0)
-    return {"volumes": vol_results, "nodes": node_results, "status": overall}
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# CHECKS 5–10 — PVC & POD DEEP CHECKS
+# CHECKS 2–7 — PVC & POD DEEP CHECKS
 # ═══════════════════════════════════════════════════════════════════════════════
 async def check_pvc_and_pods() -> dict:
     t0 = time.time()
@@ -1204,7 +1089,6 @@ async def run_all_checks():
             check_postgres(),
             check_minio(),
             check_kubernetes_pods(),
-            check_longhorn(),
             check_pvc_and_pods(),
             check_clickhouse_tables(),
             check_kubernetes_resources(),
@@ -1216,7 +1100,6 @@ async def run_all_checks():
             "pg",
             "minio",
             "k8s_pods",
-            "longhorn",
             "pvc_pods",
             "ch_tables",
             "k8s_resources",
@@ -1240,7 +1123,6 @@ async def run_all_checks():
             pg,
             minio,
             k8s_pods,
-            longhorn,
             pvc_pods,
             ch_tables,
             k8s_resources,
@@ -1257,7 +1139,6 @@ async def run_all_checks():
                 **safe(k8s_pods, "K8s Pods"),
                 "__resources__": safe(k8s_resources, "K8s Resources"),
             },
-            "longhorn": {"__longhorn__": safe(longhorn, "Longhorn")},
             "pods_pvcs": {"__pods_pvcs__": safe(pvc_pods, "Pods/PVCs")},
         }
         last_checked = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1302,7 +1183,6 @@ async def startup():
     logger.info("HealthWatch startup — active config:")
     logger.info(f"  K8S_NAMESPACE={K8S_NAMESPACE}  LOG_LEVEL={LOG_LEVEL}")
     logger.info(f"  CLICKHOUSE={CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}  db={CLICKHOUSE_DB}")
-    logger.info(f"  LONGHORN_URL={LONGHORN_URL}")
     logger.info(f"  MINIO_ENDPOINT={MINIO_ENDPOINT}")
     logger.info(f"  POSTGRES={POSTGRES_HOST}:{POSTGRES_PORT}  db={POSTGRES_DB}")
     logger.info(f"  KAFKA_CONNECT_URL={KAFKA_CONNECT_URL}")
