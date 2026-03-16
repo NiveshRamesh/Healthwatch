@@ -1,0 +1,87 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# HealthWatch Helm Values — Production
+# ──────────────────────────────────────────────────────────────────────────────
+
+image:
+  repository: healthwatch
+  tag: latest
+  pullPolicy: Never   # using locally loaded image, no registry
+
+replicaCount: 1
+namespace: vsmaps
+
+service:
+  type: ClusterIP
+  port: 8080
+
+resources:
+  requests:
+    cpu: "200m"
+    memory: "256Mi"
+  limits:
+    cpu: "500m"
+    memory: "512Mi"
+
+# ── Application config (ConfigMap) ───────────────────────────────────────────
+config:
+  # Kubernetes
+  k8sNamespace: "vsmaps"
+  monitoredPods: "denver,nairobi,broker,kafka-cluster-cp-zookeeper,chi-clickhouse,postgresql,minio-tenant,keycloak,traefik"
+  podRestartThreshold: "10"
+  nodeCpuWarnThreshold: "70"
+  nodeMemWarnThreshold: "80"
+  podCpuWarnThreshold: "70"
+  podMemWarnThreshold: "80"
+
+  # ClickHouse
+  clickhouseHost: "clickhouse.vsmaps.svc.cluster.local"
+  clickhousePort: "8123"
+  clickhouseUser: "default"
+  clickhouseDb: "vusmart"
+  chClusterName: "vusmart"
+  chMutationAgeMinutes: "30"
+  chReplicationPostponeLimit: "100"
+
+  # Kafka
+  kafkaRequiredConnectors: "enrichment-connector"
+  kafkaConnectUrl: "http://connect.vsmaps.svc.cluster.local:9082"
+
+  # ZooKeeper (stats via pod exec — ruok/mntr on port 2181)
+  zkPodName: "kafka-cluster-cp-zookeeper-0"
+  zkPort: "2181"
+  zkOutstandingWarn: "10"
+
+  # Longhorn
+  longhornUrl: "http://longhorn-backend.longhorn-system.svc.cluster.local:9500"
+  lhActualThreshold: "0.7"
+  lhNodeFreeThreshold: "0.5"
+
+  # PVC
+  pvcUsedThreshold: "0.8"
+
+  # PostgreSQL
+  postgresHost: "timescaledb.vsmaps.svc.cluster.local"
+  postgresPort: "5432"
+  postgresUser: "postgres"
+  postgresDb: "postgres"
+
+  # MinIO
+  minioEndpoint: "http://minio-tenant.vsmaps.svc.cluster.local:9000"
+
+  # Logging
+  logLevel: "INFO"
+
+# ── Secrets (injected at deploy time, NEVER commit real values to Git) ────────
+secrets:
+  clickhousePassword: ""
+  postgresPassword: ""
+
+podLabels: {}
+podAnnotations: {}
+
+serviceAccount:
+  create: true
+  name: healthwatch
+
+rbac:
+  create: true

@@ -1,0 +1,38 @@
+{{- if .Values.rbac.create }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "healthwatch.fullname" . }}-reader
+  labels:
+    {{- include "healthwatch.labels" . | nindent 4 }}
+rules:
+  # Core resources
+  - apiGroups: [""]
+    resources: ["pods", "nodes", "persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  # Pod exec — required for ZooKeeper ruok/mntr stats (check_zookeeper_stats)
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]
+  # Metrics API (for node/pod CPU and memory usage)
+  - apiGroups: ["metrics.k8s.io"]
+    resources: ["nodes", "pods"]
+    verbs: ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "healthwatch.fullname" . }}-reader-binding
+  labels:
+    {{- include "healthwatch.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "healthwatch.fullname" . }}-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.serviceAccount.name }}
+    namespace: {{ .Values.namespace }}
+{{- end }}

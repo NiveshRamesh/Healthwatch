@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "healthwatch.fullname" . }}-config
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "healthwatch.labels" . | nindent 4 }}
+data:
+  # Kubernetes
+  K8S_NAMESPACE:                  {{ .Values.config.k8sNamespace | quote }}
+  MONITORED_PODS:                 {{ .Values.config.monitoredPods | quote }}
+  POD_RESTART_THRESHOLD:          {{ .Values.config.podRestartThreshold | quote }}
+  NODE_CPU_WARN_THRESHOLD:        {{ .Values.config.nodeCpuWarnThreshold | quote }}
+  NODE_MEM_WARN_THRESHOLD:        {{ .Values.config.nodeMemWarnThreshold | quote }}
+  POD_CPU_WARN_THRESHOLD:         {{ .Values.config.podCpuWarnThreshold | quote }}
+  POD_MEM_WARN_THRESHOLD:         {{ .Values.config.podMemWarnThreshold | quote }}
+  # ClickHouse
+  CLICKHOUSE_HOST:                {{ .Values.config.clickhouseHost | quote }}
+  CLICKHOUSE_PORT:                {{ .Values.config.clickhousePort | quote }}
+  CLICKHOUSE_USER:                {{ .Values.config.clickhouseUser | quote }}
+  CLICKHOUSE_DB:                  {{ .Values.config.clickhouseDb | quote }}
+  CH_CLUSTER_NAME:                {{ .Values.config.chClusterName | quote }}
+  CH_MUTATION_AGE_MINUTES:        {{ .Values.config.chMutationAgeMinutes | quote }}
+  CH_REPLICATION_POSTPONE_LIMIT:  {{ .Values.config.chReplicationPostponeLimit | quote }}
+  # Kafka / ZooKeeper
+  KAFKA_REQUIRED_CONNECTORS:      {{ .Values.config.kafkaRequiredConnectors | quote }}
+  KAFKA_CONNECT_URL:              {{ .Values.config.kafkaConnectUrl | quote }}
+  ZK_POD_NAME:                    {{ .Values.config.zkPodName | quote }}
+  ZK_PORT:                        {{ .Values.config.zkPort | quote }}
+  ZK_OUTSTANDING_WARN:            {{ .Values.config.zkOutstandingWarn | quote }}
+  # Longhorn
+  LONGHORN_URL:                   {{ .Values.config.longhornUrl | quote }}
+  LH_ACTUAL_THRESHOLD:            {{ .Values.config.lhActualThreshold | quote }}
+  LH_NODE_FREE_THRESHOLD:         {{ .Values.config.lhNodeFreeThreshold | quote }}
+  # PVC
+  PVC_USED_THRESHOLD:             {{ .Values.config.pvcUsedThreshold | quote }}
+  # PostgreSQL
+  POSTGRES_HOST:                  {{ .Values.config.postgresHost | quote }}
+  POSTGRES_PORT:                  {{ .Values.config.postgresPort | quote }}
+  POSTGRES_USER:                  {{ .Values.config.postgresUser | quote }}
+  POSTGRES_DB:                    {{ .Values.config.postgresDb | quote }}
+  # MinIO
+  MINIO_ENDPOINT:                 {{ .Values.config.minioEndpoint | quote }}
+  # Logging
+  LOG_LEVEL:                      {{ .Values.config.logLevel | quote }}
