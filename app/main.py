@@ -146,19 +146,38 @@ def _timed(name: str, t0: float):
 
 
 def _sync_exec_pod(pod_name: str, namespace: str, cmd: str) -> str:
-    """Exec a shell command inside a pod and return stdout+stderr as a string."""
+    """Exec a shell command inside a pod and return stdout+stderr as a string.
+
+    IMPORTANT: uses a dedicated, throw-away ApiClient — never the shared _k8s_core.
+    kubernetes.stream monkey-patches api_client.request = websocket_call on
+    whatever client is passed to stream(). Reusing the shared client would corrupt
+    it and cause all subsequent normal HTTP API calls to fail with
+    'Handshake status 200 OK'.
+    """
+    from kubernetes import client as k8s_client, config as k8s_config
     from kubernetes.stream import stream as k8s_stream
-    core, _, _ = _get_k8s()
-    return k8s_stream(
-        core.connect_get_namespaced_pod_exec,
-        pod_name,
-        namespace,
-        command=["sh", "-c", cmd],
-        stderr=True,
-        stdin=False,
-        stdout=True,
-        tty=False,
-    )
+
+    cfg = k8s_client.Configuration()
+    try:
+        k8s_config.load_incluster_config(client_configuration=cfg)
+    except Exception:
+        k8s_config.load_kube_config(client_configuration=cfg)
+
+    api_client = k8s_client.ApiClient(configuration=cfg)
+    try:
+        core = k8s_client.CoreV1Api(api_client=api_client)
+        return k8s_stream(
+            core.connect_get_namespaced_pod_exec,
+            pod_name,
+            namespace,
+            command=["sh", "-c", cmd],
+            stderr=True,
+            stdin=False,
+            stdout=True,
+            tty=False,
+        )
+    finally:
+        api_client.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
