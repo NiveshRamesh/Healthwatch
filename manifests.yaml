@@ -13,15 +13,18 @@ metadata:
   namespace: default   # <-- change to your namespace
 
 ---
-# ClusterRole — read-only access to pods and nodes
+# ClusterRole — read-only access to pods/nodes + exec into pods for ZK stats
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: healthwatch-reader
 rules:
   - apiGroups: [""]
-    resources: ["pods", "nodes"]
+    resources: ["pods", "nodes", "persistentvolumeclaims"]
     verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create", "get"]   # required for kubectl-exec style API calls (ZK stats)
 
 ---
 # ClusterRoleBinding
