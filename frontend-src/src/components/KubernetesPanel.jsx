@@ -1,5 +1,5 @@
 import React from 'react';
-import { Badge, SubSection, Chip, InfoRow } from './Shared';
+import { Badge, ProgressBar, SubSection, Chip, InfoRow } from './Shared';
 
 /* ── Node resource card ───────────────────────────────────────────── */
 function NodeCard({ node }) {
