@@ -45,6 +45,9 @@ config:
   # Kafka
   kafkaRequiredConnectors: "enrichment-connector"
   kafkaConnectUrl: "http://connect.vsmaps.svc.cluster.local:9082"
+  kafkaBootstrapServers: "kafka-cluster-cp-kafka-headless.vsmaps.svc.cluster.local:9092"
+  kafkaLiveWindowMinutes: "10"
+  kafkaLagWarnThreshold: "10000"
 
   # ZooKeeper (stats via pod exec — ruok/mntr on port 2181)
   zkPodName: "kafka-cluster-cp-zookeeper-0"

@@ -38,6 +38,11 @@ KAFKA_REQUIRED_CONNECTORS = os.getenv(
 KAFKA_CONNECT_URL = os.getenv(
     "KAFKA_CONNECT_URL", "http://connect.vsmaps.svc.cluster.local:9082"
 )
+KAFKA_BOOTSTRAP_SERVERS = os.getenv(
+    "KAFKA_BOOTSTRAP_SERVERS", "kafka-cluster-cp-kafka-headless.vsmaps.svc.cluster.local:9092"
+)
+KAFKA_LIVE_WINDOW_MINUTES = int(os.getenv("KAFKA_LIVE_WINDOW_MINUTES", "10"))
+KAFKA_LAG_WARN_THRESHOLD = int(os.getenv("KAFKA_LAG_WARN_THRESHOLD", "10000"))
 NODE_CPU_WARN_THRESHOLD = float(os.getenv("NODE_CPU_WARN_THRESHOLD", "70"))
 NODE_MEM_WARN_THRESHOLD = float(os.getenv("NODE_MEM_WARN_THRESHOLD", "80"))
 POD_CPU_WARN_THRESHOLD = float(os.getenv("POD_CPU_WARN_THRESHOLD", "70"))
@@ -173,6 +178,127 @@ def _sync_exec_pod(pod_name: str, namespace: str, cmd: str) -> str:
         )
     finally:
         api_client.close()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# KAFKA LIVE DATA + CONSUMER LAG (via kafka-python AdminClient)
+# ═══════════════════════════════════════════════════════════════════════════════
+def _sync_kafka_live_and_lag() -> dict:
+    """
+    Queries the Kafka broker directly (no ClickHouse dependency) to produce:
+
+    topic_live_status  — per-topic: has_data, is_live, total_messages
+      - live  : has messages AND at least one message produced in the last
+                KAFKA_LIVE_WINDOW_MINUTES minutes
+      - stale : has messages but nothing new within the live window
+      - empty : LOG-END-OFFSET == BEGINNING-OFFSET (no messages ever / all deleted)
+
+    consumer_lag — per-topic: total_lag, max_lag, groups dict
+      - ClickHouse Kafka Engine consumers commit offset=-1 to __consumer_offsets;
+        we treat those as lag=0 (CH manages offsets internally).
+    """
+    from kafka import KafkaAdminClient, KafkaConsumer, TopicPartition
+
+    result: dict = {"topic_live_status": {}, "consumer_lag": {}}
+    client_cfg = dict(
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        request_timeout_ms=10_000,
+        client_id="healthwatch",
+    )
+
+    admin = KafkaAdminClient(**client_cfg)
+    consumer = KafkaConsumer(**client_cfg)
+
+    try:
+        # ── 1. Collect consumer group lag ────────────────────────────────────
+        group_ids = [g[0] for g in admin.list_consumer_groups()]
+        logger.info(f"[kafka_live_lag] {len(group_ids)} consumer groups found")
+
+        all_tps: set = set()
+
+        for group_id in group_ids:
+            try:
+                committed = admin.list_consumer_group_offsets(group_id)
+                if not committed:
+                    continue
+
+                tps = list(committed.keys())
+                end_offsets = consumer.end_offsets(tps)
+
+                for tp, om in committed.items():
+                    all_tps.add(tp)
+                    end = end_offsets.get(tp) or 0
+                    # offset=-1 means ClickHouse-style consumer (manages its own offsets)
+                    current = om.offset if (om and om.offset >= 0) else end
+                    lag = max(0, end - current)
+
+                    if tp.topic not in result["consumer_lag"]:
+                        result["consumer_lag"][tp.topic] = {
+                            "total_lag": 0, "max_lag": 0, "groups": {}
+                        }
+                    entry = result["consumer_lag"][tp.topic]
+                    entry["total_lag"] += lag
+                    entry["max_lag"] = max(entry["max_lag"], lag)
+                    entry["groups"][group_id] = entry["groups"].get(group_id, 0) + lag
+
+            except Exception as e:
+                logger.warning(f"[kafka_live_lag] group={group_id} skipped: {e}")
+
+        logger.info(
+            f"[kafka_live_lag] lag collected for {len(result['consumer_lag'])} topics"
+        )
+
+        # ── 2. Compute live / stale / empty per topic ────────────────────────
+        tps = list(all_tps)
+        if not tps:
+            return result
+
+        end_offsets   = consumer.end_offsets(tps)
+        begin_offsets = consumer.beginning_offsets(tps)
+
+        threshold_ms = int((time.time() - KAFKA_LIVE_WINDOW_MINUTES * 60) * 1000)
+        at_threshold = consumer.offsets_for_times({tp: threshold_ms for tp in tps})
+
+        # group partitions by topic
+        by_topic: dict = {}
+        for tp in tps:
+            by_topic.setdefault(tp.topic, []).append(tp)
+
+        for topic, topic_tps in by_topic.items():
+            total_end   = sum(end_offsets.get(tp)   or 0 for tp in topic_tps)
+            total_begin = sum(begin_offsets.get(tp) or 0 for tp in topic_tps)
+            has_data = total_end > total_begin
+
+            # offsets_for_times returns not-None for a partition when a message
+            # with timestamp >= threshold exists → that partition received data
+            # within the live window
+            is_live = has_data and any(
+                at_threshold.get(tp) is not None for tp in topic_tps
+            )
+
+            logger.debug(
+                f"[kafka_live_lag] topic={topic} msgs={total_end - total_begin} "
+                f"has_data={has_data} is_live={is_live}"
+            )
+
+            result["topic_live_status"][topic] = {
+                "has_data": has_data,
+                "is_live": is_live,
+                "total_messages": total_end - total_begin,
+            }
+
+        logger.info(
+            f"[kafka_live_lag] live_status: "
+            f"live={sum(1 for v in result['topic_live_status'].values() if v['is_live'])} "
+            f"stale={sum(1 for v in result['topic_live_status'].values() if v['has_data'] and not v['is_live'])} "
+            f"empty={sum(1 for v in result['topic_live_status'].values() if not v['has_data'])}"
+        )
+
+    finally:
+        consumer.close()
+        admin.close()
+
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -910,10 +1036,26 @@ async def check_kafka() -> dict:
         zr = [p for p in zp if p.status.phase == "Running"]
         zs = "ok" if zr else "warn"
         logger.info(f"[kafka] zookeeper={len(zp)} running={len(zr)} -> {zs}")
-        connectors, zk_stats = await asyncio.gather(
+        loop = asyncio.get_event_loop()
+        connectors, zk_stats, live_lag = await asyncio.gather(
             check_kafka_connectors(),
             check_zookeeper_stats(),
+            loop.run_in_executor(None, _sync_kafka_live_and_lag),
         )
+
+        tls = live_lag.get("topic_live_status", {})
+        lag = live_lag.get("consumer_lag", {})
+
+        live_count  = sum(1 for v in tls.values() if v["is_live"])
+        stale_count = sum(1 for v in tls.values() if v["has_data"] and not v["is_live"])
+        empty_count = sum(1 for v in tls.values() if not v["has_data"])
+        high_lag    = sum(1 for v in lag.values() if v["total_lag"] > KAFKA_LAG_WARN_THRESHOLD)
+
+        live_status  = "ok"   if live_count > 0  else "warn"
+        live_detail  = f"{live_count} live · {stale_count} stale · {empty_count} empty"
+        lag_status   = "warn" if high_lag > 0     else "ok"
+        lag_detail   = f"{high_lag} topic(s) high lag" if high_lag else f"{len(lag)} topics · all lag normal"
+
         _timed("kafka", t0)
         return {
             "Broker Health": {"status": bs, "detail": bd},
@@ -926,17 +1068,18 @@ async def check_kafka() -> dict:
                 "detail": zk_stats["detail"],
                 "_zk_stats": zk_stats,
             },
-            "Live Data": {"status": "ok", "detail": "Topic live check via CH"},
-            "Consumer Lag": {
-                "status": "ok",
-                "detail": "Lag check via CH kafka_consumers",
-            },
+            "Live Data": {"status": live_status, "detail": live_detail},
+            "Consumer Lag": {"status": lag_status, "detail": lag_detail},
             "Kafka Connectors": {
                 "status": connectors["status"],
                 "detail": connectors["detail"],
                 "_connectors": connectors,
             },
-            "__details__": {"topics": {}, "topic_live_status": {}, "consumer_lag": {}},
+            "__details__": {
+                "topics": {},
+                "topic_live_status": tls,
+                "consumer_lag": lag,
+            },
         }
     except Exception as e:
         logger.error(f"[kafka] EXCEPTION: {e}\n{traceback.format_exc()}")
@@ -1186,6 +1329,7 @@ async def startup():
     logger.info(f"  MINIO_ENDPOINT={MINIO_ENDPOINT}")
     logger.info(f"  POSTGRES={POSTGRES_HOST}:{POSTGRES_PORT}  db={POSTGRES_DB}")
     logger.info(f"  KAFKA_CONNECT_URL={KAFKA_CONNECT_URL}")
+    logger.info(f"  KAFKA_BOOTSTRAP_SERVERS={KAFKA_BOOTSTRAP_SERVERS}  LIVE_WINDOW={KAFKA_LIVE_WINDOW_MINUTES}min  LAG_WARN>{KAFKA_LAG_WARN_THRESHOLD}")
     logger.info(f"  ZK_POD_NAME={ZK_POD_NAME}  ZK_PORT={ZK_PORT}  ZK_OUTSTANDING_WARN={ZK_OUTSTANDING_WARN}")
     logger.info(f"  KAFKA_REQUIRED={KAFKA_REQUIRED_CONNECTORS}")
     logger.info(

@@ -6,3 +6,4 @@ clickhouse-connect==0.7.12
 kubernetes==29.0.0
 apscheduler==3.10.4
 python-multipart==0.0.9
+kafka-python==2.0.2

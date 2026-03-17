@@ -25,6 +25,9 @@ data:
   # Kafka / ZooKeeper
   KAFKA_REQUIRED_CONNECTORS:      {{ .Values.config.kafkaRequiredConnectors | quote }}
   KAFKA_CONNECT_URL:              {{ .Values.config.kafkaConnectUrl | quote }}
+  KAFKA_BOOTSTRAP_SERVERS:        {{ .Values.config.kafkaBootstrapServers | quote }}
+  KAFKA_LIVE_WINDOW_MINUTES:      {{ .Values.config.kafkaLiveWindowMinutes | quote }}
+  KAFKA_LAG_WARN_THRESHOLD:       {{ .Values.config.kafkaLagWarnThreshold | quote }}
   ZK_POD_NAME:                    {{ .Values.config.zkPodName | quote }}
   ZK_PORT:                        {{ .Values.config.zkPort | quote }}
   ZK_OUTSTANDING_WARN:            {{ .Values.config.zkOutstandingWarn | quote }}
