@@ -39,7 +39,7 @@ KAFKA_CONNECT_URL = os.getenv(
     "KAFKA_CONNECT_URL", "http://connect.vsmaps.svc.cluster.local:9082"
 )
 KAFKA_BOOTSTRAP_SERVERS = os.getenv(
-    "KAFKA_BOOTSTRAP_SERVERS", "kafka-cluster-cp-kafka-headless.vsmaps.svc.cluster.local:9092"
+    "KAFKA_BOOTSTRAP_SERVERS", "broker-headless.vsmaps.svc.cluster.local:9092"
 )
 KAFKA_LIVE_WINDOW_MINUTES = int(os.getenv("KAFKA_LIVE_WINDOW_MINUTES", "10"))
 KAFKA_LAG_WARN_THRESHOLD = int(os.getenv("KAFKA_LAG_WARN_THRESHOLD", "10000"))
@@ -1024,7 +1024,7 @@ async def check_kafka() -> dict:
     try:
         core, _, _ = _get_k8s()
         bp = core.list_namespaced_pod(
-            namespace=K8S_NAMESPACE, label_selector="app=cp-kafka"
+            namespace=K8S_NAMESPACE, label_selector="app=broker"
         ).items
         br = [p for p in bp if p.status.phase == "Running"]
         bs = "ok" if br else "error"

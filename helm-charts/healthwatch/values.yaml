@@ -45,7 +45,7 @@ config:
   # Kafka
   kafkaRequiredConnectors: "enrichment-connector"
   kafkaConnectUrl: "http://connect.vsmaps.svc.cluster.local:9082"
-  kafkaBootstrapServers: "kafka-cluster-cp-kafka-headless.vsmaps.svc.cluster.local:9092"
+  kafkaBootstrapServers: "broker-headless.vsmaps.svc.cluster.local:9092"
   kafkaLiveWindowMinutes: "10"
   kafkaLagWarnThreshold: "10000"
 
