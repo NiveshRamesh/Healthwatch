@@ -95,19 +95,6 @@ export default function ServiceSection({ svcKey, meta, checks, fetchTopic }) {
         </div>
 
         <div style={{ display:'flex', alignItems:'center', gap:10 }}>
-          {/* Kafka topic diagnosis button */}
-          {svcKey === 'kafka' && (
-            <button
-              onClick={e => { e.stopPropagation(); }}
-              style={{
-                display:'inline-flex', alignItems:'center', gap:5,
-                background:'rgba(0,153,255,0.12)', color:'var(--accent2)',
-                border:'1px solid rgba(0,153,255,0.3)', borderRadius:6,
-                padding:'4px 10px', fontFamily:'var(--mono)', fontSize:'0.65rem',
-                fontWeight:700, cursor:'pointer',
-              }}
-            >🔍 TOPIC DIAGNOSIS</button>
-          )}
 
           <div style={{
             display:'flex', alignItems:'center', gap:6,
