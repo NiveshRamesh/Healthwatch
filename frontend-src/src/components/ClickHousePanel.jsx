@@ -264,9 +264,9 @@ export default function ClickHousePanel({ checks }) {
 
         {/* #15 Tables without TTL */}
         <ChCheckRow
-          icon="⏱️" label="Tables Without TTL Policy"
+          icon="⏱️" label="Tables Without Timestamp Partition"
           status={noTTL.status} detail={noTTL.detail}
-          tip="MergeTree tables with no TTL policy defined. Without TTL, data is never automatically deleted and disk usage grows indefinitely. Add TTL to control data retention."
+          tip="MergeTree tables missing a timestamp-based PARTITION BY (toYYYYMMDD, toYYYYMM, toDate, toStartOf*). Timestamp partitioning is required for hot→warm tiered storage. Tables without it cannot be moved between storage tiers."
         >
           {(noTTL.tables || []).length > 0 && (
             <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>

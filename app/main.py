@@ -727,26 +727,24 @@ async def check_clickhouse_tables() -> dict:
                 f"[ch_tables] long mutations: {[m['mutation_id'] for m in mutations]}"
             )
 
-        # ttl_field column removed in CH 25.x; use create_table_query instead
-        try:
-            r15 = q(
-                "Q15_no_ttl",
-                "SELECT database,name FROM system.tables "
-                "WHERE engine LIKE '%MergeTree%' "
-                "AND create_table_query NOT LIKE '%TTL%' "
-                "AND database NOT IN ('system','information_schema','INFORMATION_SCHEMA')",
-            )
-        except Exception:
-            r15 = q(
-                "Q15_no_ttl_fallback",
-                "SELECT database,name FROM system.tables "
-                "WHERE engine LIKE '%MergeTree%' AND toUInt32(ttl_field)=0 "
-                "AND database NOT IN ('system','information_schema','INFORMATION_SCHEMA')",
-            )
-        no_ttl = [{"database": r[0], "table": r[1]} for r in r15]
-        if no_ttl:
-            _names = [t["database"] + "." + t["table"] for t in no_ttl]
-            logger.warning(f"[ch_tables] tables without TTL: {_names}")
+        # Flag tables missing a timestamp-based PARTITION BY — required for
+        # hot→warm tiered storage. Checks for toYYYYMMDD/toYYYYMM/toDate/toStartOf.
+        r15 = q(
+            "Q15_no_ts_partition",
+            "SELECT database,name FROM system.tables "
+            "WHERE engine LIKE '%MergeTree%' "
+            "AND NOT ("
+            "  create_table_query LIKE '%PARTITION BY toYYYYMMDD%' OR "
+            "  create_table_query LIKE '%PARTITION BY toYYYYMM%' OR "
+            "  create_table_query LIKE '%PARTITION BY toDate%' OR "
+            "  create_table_query LIKE '%PARTITION BY toStartOf%'"
+            ") "
+            "AND database NOT IN ('system','information_schema','INFORMATION_SCHEMA')",
+        )
+        no_ts_partition = [{"database": r[0], "table": r[1]} for r in r15]
+        if no_ts_partition:
+            _names = [t["database"] + "." + t["table"] for t in no_ts_partition]
+            logger.warning(f"[ch_tables] tables without timestamp partition: {_names}")
 
         r16 = q(
             "Q16_detached_parts",
@@ -831,11 +829,11 @@ async def check_clickhouse_tables() -> dict:
                 else "No long mutations",
             },
             "tables_without_ttl": {
-                "tables": no_ttl,
-                "status": "warn" if no_ttl else "ok",
-                "detail": f"{len(no_ttl)} tables missing TTL"
-                if no_ttl
-                else "All tables have TTL",
+                "tables": no_ts_partition,
+                "status": "warn" if no_ts_partition else "ok",
+                "detail": f"{len(no_ts_partition)} tables missing timestamp partition"
+                if no_ts_partition
+                else "All tables have timestamp partition",
             },
             "detached_parts": {
                 "parts": detached,
