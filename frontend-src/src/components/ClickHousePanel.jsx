@@ -112,86 +112,279 @@ function ReplicaInconsistencyRow({ replicaIncons }) {
             ))}</tbody>
           </table>
 
-          {pages > 1 && (
-            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
-              marginTop:8, fontFamily:'var(--mono)', fontSize:'0.65rem', color:'var(--muted)' }}>
-              <span>Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}</span>
-              <div style={{ display:'flex', gap:6 }}>
-                <button onClick={() => setPage(p => p - 1)} disabled={page === 0}
-                  style={{ padding:'2px 10px', borderRadius:4, border:'1px solid var(--border)',
-                    background: page === 0 ? 'transparent' : 'var(--surface)',
-                    color: page === 0 ? 'var(--muted)' : 'var(--text)',
-                    cursor: page === 0 ? 'default' : 'pointer', fontFamily:'var(--mono)', fontSize:'0.65rem' }}>
-                  ← Prev
-                </button>
-                <span style={{ padding:'2px 6px', alignSelf:'center' }}>{page + 1} / {pages}</span>
-                <button onClick={() => setPage(p => p + 1)} disabled={page >= pages - 1}
-                  style={{ padding:'2px 10px', borderRadius:4, border:'1px solid var(--border)',
-                    background: page >= pages - 1 ? 'transparent' : 'var(--surface)',
-                    color: page >= pages - 1 ? 'var(--muted)' : 'var(--text)',
-                    cursor: page >= pages - 1 ? 'default' : 'pointer', fontFamily:'var(--mono)', fontSize:'0.65rem' }}>
-                  Next →
-                </button>
-              </div>
-            </div>
-          )}
+          <Paginator page={page} pages={pages} total={total} pageSize={PAGE_SIZE}
+            onPrev={() => setPage(p => p - 1)} onNext={() => setPage(p => p + 1)} />
         </div>
       )}
     </ChCheckRow>
   );
 }
 
+/* ── Shared paginator ─────────────────────────────────────────────── */
+function Paginator({ page, pages, total, pageSize, onPrev, onNext }) {
+  if (pages <= 1) return null;
+  const from = page * pageSize + 1;
+  const to   = Math.min((page + 1) * pageSize, total);
+  return (
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
+      marginTop:8, fontFamily:'var(--mono)', fontSize:'0.65rem', color:'var(--muted)' }}>
+      <span>Showing {from}–{to} of {total}</span>
+      <div style={{ display:'flex', gap:6 }}>
+        <button onClick={onPrev} disabled={page === 0}
+          style={{ padding:'2px 10px', borderRadius:4, border:'1px solid var(--border)',
+            background: page === 0 ? 'transparent' : 'var(--surface)',
+            color: page === 0 ? 'var(--muted)' : 'var(--text)',
+            cursor: page === 0 ? 'default' : 'pointer', fontFamily:'var(--mono)', fontSize:'0.65rem' }}>
+          ← Prev
+        </button>
+        <span style={{ padding:'2px 6px', alignSelf:'center' }}>{page + 1} / {pages}</span>
+        <button onClick={onNext} disabled={page >= pages - 1}
+          style={{ padding:'2px 10px', borderRadius:4, border:'1px solid var(--border)',
+            background: page >= pages - 1 ? 'transparent' : 'var(--surface)',
+            color: page >= pages - 1 ? 'var(--muted)' : 'var(--text)',
+            cursor: page >= pages - 1 ? 'default' : 'pointer', fontFamily:'var(--mono)', fontSize:'0.65rem' }}>
+          Next →
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /* ── CH Kafka Engine Lag section ──────────────────────────────────── */
 function ChKafkaEngineLag({ chKafkaLag }) {
-  const rows = Object.entries(chKafkaLag || {})
-    .sort((a, b) => b[1].total_lag - a[1].total_lag);
-
-  const anyHigh = rows.some(([, v]) => v.total_lag > 10000);
-  const status  = anyHigh ? 'warn' : 'ok';
-  const detail  = rows.length === 0
+  const [page, setPage] = useState(0);
+  const allRows  = Object.entries(chKafkaLag || {}).sort((a, b) => b[1].total_lag - a[1].total_lag);
+  const highRows = allRows.filter(([, v]) => v.total_lag > 10000);
+  const anyHigh  = highRows.length > 0;
+  const status   = anyHigh ? 'warn' : 'ok';
+  const detail   = allRows.length === 0
     ? 'No Kafka engine tables'
     : anyHigh
-      ? `${rows.filter(([, v]) => v.total_lag > 10000).length} table(s) high lag`
-      : `${rows.length} table(s) · all lag normal`;
+      ? `${highRows.length} table(s) high lag`
+      : `${allRows.length} table(s) · all lag normal`;
+
+  const rows  = anyHigh ? highRows : [];   // only show table when there's high lag
+  const total = rows.length;
+  const pages = Math.ceil(total / PAGE_SIZE);
+  const slice = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   return (
     <ChCheckRow
       icon="⚡" label="Kafka Engine Consumer Lag"
       status={status} detail={detail}
-      tip="How far behind each ClickHouse Kafka Engine table is from the Kafka topic's latest offset. Computed from system.kafka_consumers committed_offset vs Kafka end_offset. High lag (>10,000) means ClickHouse is not keeping up with the incoming message rate."
+      tip="How far behind each ClickHouse Kafka Engine table is from the Kafka topic's latest offset. Computed from system.kafka_consumers current_offset vs Kafka end_offset. Threshold: >10,000 messages = HIGH LAG."
+    >
+      {total > 0 && (
+        <div>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.68rem', fontFamily:'var(--mono)' }}>
+            <thead><tr>
+              {['CH Table','Topics','Total Lag'].map(h => (
+                <th key={h} style={{ textAlign:'left', padding:'4px 8px', color:'var(--muted)',
+                  borderBottom:'1px solid var(--border)' }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {slice.map(([key, v], i) => {
+                const topics = Object.keys(v.topics || {}).join(', ') || '—';
+                return (
+                  <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(245,158,11,0.04)' }}>
+                    <td style={{ padding:'4px 8px', color:'var(--text)', fontWeight:600 }}>{key}</td>
+                    <td style={{ padding:'4px 8px', color:'var(--muted)', fontSize:'0.62rem',
+                      maxWidth:220, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
+                      title={topics}>{topics}</td>
+                    <td style={{ padding:'4px 8px', color:'var(--warn)', fontWeight:700 }}>{fmt(v.total_lag)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <Paginator page={page} pages={pages} total={total} pageSize={PAGE_SIZE}
+            onPrev={() => setPage(p => p - 1)} onNext={() => setPage(p => p + 1)} />
+        </div>
+      )}
+    </ChCheckRow>
+  );
+}
+
+/* ── Kafka Pipeline Health ────────────────────────────────────────── */
+function KafkaPipelineHealth({ data }) {
+  const [page, setPage] = useState(0);
+  const rows  = (data?.tables || []).filter(r => r.status !== 'ok');
+  const total = rows.length;
+  const pages = Math.ceil(total / PAGE_SIZE);
+  const slice = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  return (
+    <ChCheckRow
+      icon="🔌" label="Kafka Pipeline Health"
+      status={data?.status || 'ok'} detail={data?.detail || ''}
+      tip="Per-table staleness from system.kafka_consumers. Warns when seconds_since_last_commit > 300s (5 min). Flags tables that have NEVER committed (last_commit_time = epoch 1970) — likely misconfigured or stalled."
+    >
+      {total > 0 && (
+        <div>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.68rem', fontFamily:'var(--mono)' }}>
+            <thead><tr>
+              {['Table','Last Commit','Secs Ago','State'].map(h => (
+                <th key={h} style={{ textAlign:'left', padding:'4px 8px', color:'var(--muted)',
+                  borderBottom:'1px solid var(--border)' }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {slice.map((r, i) => (
+                <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(30,45,69,0.3)' }}>
+                  <td style={{ padding:'4px 8px', fontWeight:600 }}>{r.database}.{r.table}</td>
+                  <td style={{ padding:'4px 8px', color:'var(--muted)', fontSize:'0.62rem' }}>
+                    {r.never_committed ? '—' : r.last_commit_time}
+                  </td>
+                  <td style={{ padding:'4px 8px', color: r.status === 'error' ? 'var(--error)' : 'var(--warn)', fontWeight:700 }}>
+                    {r.never_committed ? 'never' : fmt(r.seconds_since_commit) + 's'}
+                  </td>
+                  <td style={{ padding:'4px 8px' }}>
+                    <span style={{
+                      display:'inline-flex', padding:'1px 6px', borderRadius:3,
+                      fontSize:'0.62rem', fontWeight:700,
+                      background: r.never_committed ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
+                      color: r.never_committed ? 'var(--error)' : 'var(--warn)',
+                    }}>{r.never_committed ? 'NEVER COMMITTED' : 'STALE'}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <Paginator page={page} pages={pages} total={total} pageSize={PAGE_SIZE}
+            onPrev={() => setPage(p => p - 1)} onNext={() => setPage(p => p + 1)} />
+        </div>
+      )}
+    </ChCheckRow>
+  );
+}
+
+/* ── Ingestion Rate ───────────────────────────────────────────────── */
+function IngestionRate({ data }) {
+  const [page, setPage] = useState(0);
+  const rows  = (data?.tables || []).filter(r => r.stopped);
+  const total = rows.length;
+  const pages = Math.ceil(total / PAGE_SIZE);
+  const slice = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  return (
+    <ChCheckRow
+      icon="📥" label="Ingestion Rate"
+      status={data?.status || 'ok'} detail={data?.detail || ''}
+      tip="Rows written per hour and per second per table from system.part_log (last 1 hour). Warns when a table has stopped inserting for more than 10 minutes — may indicate a stalled agent or connector."
+    >
+      {total > 0 && (
+        <div>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.68rem', fontFamily:'var(--mono)' }}>
+            <thead><tr>
+              {['Table','Rows/hr','Rows/sec','Last Insert','Stopped'].map(h => (
+                <th key={h} style={{ textAlign:'left', padding:'4px 8px', color:'var(--muted)',
+                  borderBottom:'1px solid var(--border)' }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {slice.map((r, i) => (
+                <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(30,45,69,0.3)' }}>
+                  <td style={{ padding:'4px 8px', fontWeight:600 }}>{r.database}.{r.table}</td>
+                  <td style={{ padding:'4px 8px' }}>{fmt(r.rows_1h)}</td>
+                  <td style={{ padding:'4px 8px' }}>{r.rows_per_sec}</td>
+                  <td style={{ padding:'4px 8px', color:'var(--muted)', fontSize:'0.62rem' }}>{r.last_insert}</td>
+                  <td style={{ padding:'4px 8px', color:'var(--warn)', fontWeight:700 }}>
+                    {r.mins_since_insert != null ? `${r.mins_since_insert}m ago` : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <Paginator page={page} pages={pages} total={total} pageSize={PAGE_SIZE}
+            onPrev={() => setPage(p => p - 1)} onNext={() => setPage(p => p + 1)} />
+        </div>
+      )}
+    </ChCheckRow>
+  );
+}
+
+/* ── Replica Exceptions ───────────────────────────────────────────── */
+function ReplicaExceptions({ data }) {
+  const [page, setPage] = useState(0);
+  const rows  = data?.tables || [];
+  const total = rows.length;
+  const pages = Math.ceil(total / PAGE_SIZE);
+  const slice = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  return (
+    <ChCheckRow
+      icon="🚨" label="Replica Exceptions"
+      status={data?.status || 'ok'} detail={data?.detail || ''}
+      tip="Tables with last_queue_update_exception or zookeeper_exception in system.replicas. Also flags tables with parts_to_check > 300 (warn) or > 500 (critical) — high part counts cause slow merges and memory pressure."
+    >
+      {total > 0 && (
+        <div>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.68rem', fontFamily:'var(--mono)' }}>
+            <thead><tr>
+              {['Table','Queue Exception','ZK Exception','Parts'].map(h => (
+                <th key={h} style={{ textAlign:'left', padding:'4px 8px', color:'var(--muted)',
+                  borderBottom:'1px solid var(--border)' }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>
+              {slice.map((r, i) => (
+                <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(239,68,68,0.04)' }}>
+                  <td style={{ padding:'4px 8px', fontWeight:600 }}>{r.database}.{r.table}</td>
+                  <td style={{ padding:'4px 8px', color:'var(--warn)', fontSize:'0.62rem',
+                    maxWidth:180, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
+                    title={r.queue_exception}>{r.queue_exception || '—'}</td>
+                  <td style={{ padding:'4px 8px', color:'var(--warn)', fontSize:'0.62rem',
+                    maxWidth:180, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
+                    title={r.zk_exception}>{r.zk_exception || '—'}</td>
+                  <td style={{ padding:'4px 8px',
+                    color: r.parts_to_check > 500 ? 'var(--error)' : r.parts_to_check > 300 ? 'var(--warn)' : 'var(--muted)',
+                    fontWeight: r.parts_to_check > 300 ? 700 : 400 }}>
+                    {r.parts_to_check}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <Paginator page={page} pages={pages} total={total} pageSize={PAGE_SIZE}
+            onPrev={() => setPage(p => p - 1)} onNext={() => setPage(p => p + 1)} />
+        </div>
+      )}
+    </ChCheckRow>
+  );
+}
+
+/* ── ClickHouse Errors ────────────────────────────────────────────── */
+function ChErrors({ data }) {
+  const rows = data?.errors || [];
+  return (
+    <ChCheckRow
+      icon="🔴" label="ClickHouse Errors (Last 1hr)"
+      status={data?.status || 'ok'} detail={data?.detail || ''}
+      tip="Insert and query failures from system.query_log grouped by error type (last 1 hour). Also checks system.text_log for background merge memory failures. Error types tracked: MEMORY_LIMIT_EXCEEDED, UNKNOWN_TABLE, SCHEMA_MISMATCH, TOO_MANY_PARTS, PARSE_ERROR, MERGE_MEMORY_LIMIT."
     >
       {rows.length > 0 && (
         <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.68rem', fontFamily:'var(--mono)' }}>
           <thead><tr>
-            {['CH Table','Topics','Total Lag','Status'].map(h => (
+            {['Error Type','Count','Severity'].map(h => (
               <th key={h} style={{ textAlign:'left', padding:'4px 8px', color:'var(--muted)',
                 borderBottom:'1px solid var(--border)' }}>{h}</th>
             ))}
           </tr></thead>
           <tbody>
-            {rows.map(([key, v], i) => {
-              const isHigh = v.total_lag > 10000;
-              const topics = Object.keys(v.topics || {}).join(', ') || '—';
-              return (
-                <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(30,45,69,0.3)' }}>
-                  <td style={{ padding:'4px 8px', color:'var(--text)', fontWeight:600 }}>{key}</td>
-                  <td style={{ padding:'4px 8px', color:'var(--muted)', fontSize:'0.62rem',
-                    maxWidth:220, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
-                    title={topics}>{topics}</td>
-                  <td style={{ padding:'4px 8px',
-                    color: isHigh ? 'var(--warn)' : 'var(--ok)',
-                    fontWeight: isHigh ? 700 : 400 }}>{fmt(v.total_lag)}</td>
-                  <td style={{ padding:'4px 8px' }}>
-                    <span style={{
-                      display:'inline-flex', alignItems:'center', padding:'1px 6px',
-                      borderRadius:3, fontSize:'0.62rem', fontWeight:700,
-                      background: isHigh ? 'rgba(245,158,11,0.15)' : 'rgba(16,185,129,0.15)',
-                      color: isHigh ? 'var(--warn)' : 'var(--ok)',
-                    }}>{isHigh ? 'HIGH LAG' : 'OK'}</span>
-                  </td>
-                </tr>
-              );
-            })}
+            {rows.map((r, i) => (
+              <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(239,68,68,0.04)' }}>
+                <td style={{ padding:'4px 8px', fontWeight:600, color:'var(--text)' }}>{r.error}</td>
+                <td style={{ padding:'4px 8px',
+                  color: r.status === 'critical' ? 'var(--error)' : 'var(--warn)',
+                  fontWeight:700 }}>{fmt(r.count)}</td>
+                <td style={{ padding:'4px 8px' }}>
+                  <span style={{
+                    display:'inline-flex', padding:'1px 6px', borderRadius:3,
+                    fontSize:'0.62rem', fontWeight:700,
+                    background: r.status === 'critical' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
+                    color: r.status === 'critical' ? 'var(--error)' : 'var(--warn)',
+                  }}>{r.status.toUpperCase()}</span>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       )}
@@ -204,16 +397,20 @@ export default function ClickHousePanel({ checks }) {
   const chTables = checks.__ch_tables__ || {};
 
   // Map check data
-  const unusedKafka   = chTables.unused_kafka_tables   || {};
-  const readOnly      = chTables.readonly_tables        || {};
-  const inactiveQ     = chTables.inactive_queries       || {};
-  const longMut       = chTables.long_mutations         || {};
-  const noTTL         = chTables.tables_without_ttl     || {};
-  const detached      = chTables.detached_parts         || {};
-  const tableSizes    = chTables.table_sizes            || {};
-  const replStuck     = chTables.replication_stuck_jobs || {};
-  const replicaIncons = chTables.replica_inconsistency  || {};
-  const chKafkaLag    = chTables.ch_kafka_lag           || {};
+  const unusedKafka    = chTables.unused_kafka_tables    || {};
+  const readOnly       = chTables.readonly_tables         || {};
+  const inactiveQ      = chTables.inactive_queries        || {};
+  const longMut        = chTables.long_mutations          || {};
+  const noTTL          = chTables.tables_without_ttl      || {};
+  const detached       = chTables.detached_parts          || {};
+  const tableSizes     = chTables.table_sizes             || {};
+  const replStuck      = chTables.replication_stuck_jobs  || {};
+  const replicaIncons  = chTables.replica_inconsistency   || {};
+  const chKafkaLag     = chTables.ch_kafka_lag            || {};
+  const kafkaPipeline  = chTables.kafka_pipeline_health   || {};
+  const ingestionRate  = chTables.ingestion_rate          || {};
+  const replicaExcept  = chTables.replica_exceptions      || {};
+  const chErrors       = chTables.ch_errors               || {};
 
   const maxBytes = Math.max(...(tableSizes.tables || []).map(t => t.bytes || 0), 1);
 
@@ -232,12 +429,14 @@ export default function ClickHousePanel({ checks }) {
         defaultOpen={true}
         badge={
           <span style={{ display:'flex', gap:4 }}>
-            {['critical','warn'].includes(detached.status)   && <Chip n={detached.parts?.length}   color="239,68,68"  label="critical" />}
-            {['warn'].includes(unusedKafka.status)           && <Chip n={unusedKafka.count}        color="245,158,11" label="warn" />}
-            {['warn'].includes(noTTL.status)                 && <Chip n={noTTL.tables?.length}     color="245,158,11" label="warn" />}
-            {['warn'].includes(longMut.status)               && <Chip n={longMut.mutations?.length} color="245,158,11" label="warn" />}
-            {Object.values(chKafkaLag).some(v => v.total_lag > 10000) &&
-              <Chip n={Object.values(chKafkaLag).filter(v => v.total_lag > 10000).length} color="245,158,11" label="kafka lag" />}
+            {['critical','warn'].includes(detached.status)      && <Chip n={detached.parts?.length}        color="239,68,68"  label="critical" />}
+            {['critical','warn'].includes(chErrors.status)      && <Chip n={chErrors.errors?.length}       color="239,68,68"  label="errors" />}
+            {['critical','warn'].includes(replicaExcept.status) && <Chip n={replicaExcept.tables?.length}  color="239,68,68"  label="replica exc" />}
+            {['warn'].includes(unusedKafka.status)              && <Chip n={unusedKafka.count}             color="245,158,11" label="warn" />}
+            {['warn'].includes(noTTL.status)                    && <Chip n={noTTL.tables?.length}          color="245,158,11" label="warn" />}
+            {['warn'].includes(longMut.status)                  && <Chip n={longMut.mutations?.length}     color="245,158,11" label="warn" />}
+            {['error','warn'].includes(kafkaPipeline.status)    && <Chip n={kafkaPipeline.tables?.filter(r=>r.status!=='ok').length} color="245,158,11" label="pipeline" />}
+            {['warn'].includes(ingestionRate.status)            && <Chip n={ingestionRate.tables?.filter(r=>r.stopped).length}      color="245,158,11" label="stopped" />}
           </span>
         }
       >
@@ -414,6 +613,18 @@ export default function ClickHousePanel({ checks }) {
 
         {/* #19 Replica inconsistency — paginated */}
         <ReplicaInconsistencyRow replicaIncons={replicaIncons} />
+
+        {/* #21 Kafka pipeline health */}
+        <KafkaPipelineHealth data={kafkaPipeline} />
+
+        {/* #22 Ingestion rate */}
+        <IngestionRate data={ingestionRate} />
+
+        {/* #23 Replica exceptions */}
+        <ReplicaExceptions data={replicaExcept} />
+
+        {/* #24 ClickHouse errors */}
+        <ChErrors data={chErrors} />
 
       </SubSection>
     </>

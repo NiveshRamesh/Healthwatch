@@ -830,6 +830,151 @@ async def check_clickhouse_tables() -> dict:
         except Exception as e:
             logger.warning(f"[ch_tables] Q20_kafka_engine_offsets failed: {e}")
 
+        # Q21 — Kafka pipeline health: per-table staleness from system.kafka_consumers
+        try:
+            r21 = q(
+                "Q21_kafka_pipeline_health",
+                "SELECT database, table, consumer_id, "
+                "       last_commit_time, "
+                "       dateDiff('second', last_commit_time, now()) AS seconds_since_commit "
+                "FROM system.kafka_consumers "
+                "WHERE database NOT IN ('system','information_schema','INFORMATION_SCHEMA') "
+                "ORDER BY seconds_since_commit DESC",
+            )
+            kafka_pipeline = []
+            for row in r21:
+                db, tbl, cid, lct, secs = row
+                never = str(lct) == "1970-01-01 00:00:00"
+                status = "error" if never else ("warn" if secs > 300 else "ok")
+                kafka_pipeline.append({
+                    "database": db, "table": tbl, "consumer_id": cid,
+                    "last_commit_time": str(lct),
+                    "seconds_since_commit": secs,
+                    "never_committed": never,
+                    "status": status,
+                })
+            stale = [r for r in kafka_pipeline if r["status"] != "ok"]
+            logger.info(f"[ch_tables] Q21 kafka_pipeline: {len(kafka_pipeline)} tables, {len(stale)} stale/never")
+        except Exception as e:
+            logger.warning(f"[ch_tables] Q21_kafka_pipeline_health failed: {e}")
+            kafka_pipeline, stale = [], []
+
+        # Q22 — Ingestion rate from system.part_log (last 1 hour)
+        try:
+            r22 = q(
+                "Q22_ingestion_rate",
+                "SELECT database, table, "
+                "       sum(rows) AS rows_1h, "
+                "       round(sum(rows) / 3600, 1) AS rows_per_sec, "
+                "       max(event_time) AS last_insert "
+                "FROM system.part_log "
+                "WHERE event_type='NewPart' "
+                "  AND event_time >= now() - INTERVAL 1 HOUR "
+                "  AND database NOT IN ('system','information_schema','INFORMATION_SCHEMA') "
+                "GROUP BY database, table "
+                "ORDER BY rows_1h DESC "
+                "LIMIT 20",
+            )
+            ingestion = []
+            for row in r22:
+                db, tbl, rows_1h, rows_sec, last_ins = row
+                mins_ago = None
+                try:
+                    import datetime as _dt
+                    if hasattr(last_ins, 'timestamp'):
+                        mins_ago = round((time.time() - last_ins.timestamp()) / 60, 1)
+                except Exception:
+                    pass
+                stopped = mins_ago is not None and mins_ago > 10
+                ingestion.append({
+                    "database": db, "table": tbl,
+                    "rows_1h": int(rows_1h), "rows_per_sec": float(rows_sec),
+                    "last_insert": str(last_ins),
+                    "mins_since_insert": mins_ago,
+                    "stopped": stopped,
+                    "status": "warn" if stopped else "ok",
+                })
+            stopped_tables = [r for r in ingestion if r["stopped"]]
+            logger.info(f"[ch_tables] Q22 ingestion: {len(ingestion)} tables, {len(stopped_tables)} stopped")
+        except Exception as e:
+            logger.warning(f"[ch_tables] Q22_ingestion_rate failed: {e}")
+            ingestion, stopped_tables = [], []
+
+        # Q23 — Replica exceptions and high part count from system.replicas
+        try:
+            r23 = q(
+                "Q23_replica_exceptions",
+                "SELECT database, table, "
+                "       last_queue_update_exception, zookeeper_exception, "
+                "       parts_to_check "
+                "FROM system.replicas "
+                "WHERE last_queue_update_exception != '' "
+                "   OR zookeeper_exception != '' "
+                "   OR parts_to_check > 300",
+            )
+            replica_exceptions = [
+                {
+                    "database": r[0], "table": r[1],
+                    "queue_exception": r[2], "zk_exception": r[3],
+                    "parts_to_check": r[4],
+                    "status": "critical" if r[4] > 500 else "warn",
+                }
+                for r in r23
+            ]
+            logger.info(f"[ch_tables] Q23 replica_exceptions: {len(replica_exceptions)}")
+        except Exception as e:
+            logger.warning(f"[ch_tables] Q23_replica_exceptions failed: {e}")
+            replica_exceptions = []
+
+        # Q24 — ClickHouse errors from query_log + text_log (last 1 hour)
+        try:
+            r24a = q(
+                "Q24a_query_errors",
+                "SELECT exception_code, count() AS cnt "
+                "FROM system.query_log "
+                "WHERE type = 'ExceptionWhileProcessing' "
+                "  AND event_time >= now() - INTERVAL 1 HOUR "
+                "  AND query_kind IN ('Insert', 'Select') "
+                "  AND exception_code IN (241,60,517,252,62) "
+                "GROUP BY exception_code "
+                "ORDER BY cnt DESC",
+            )
+            # exception codes: 241=MEMORY_LIMIT_EXCEEDED 60=UNKNOWN_TABLE
+            # 517=SCHEMA_MISMATCH 252=TOO_MANY_PARTS 62=PARSE_ERROR
+            _code_map = {
+                241: "MEMORY_LIMIT_EXCEEDED", 60: "UNKNOWN_TABLE",
+                517: "SCHEMA_MISMATCH", 252: "TOO_MANY_PARTS", 62: "PARSE_ERROR",
+            }
+            ch_errors = [
+                {"error": _code_map.get(int(r[0]), str(r[0])), "count": r[1],
+                 "status": "critical" if r[1] > 10 else "warn"}
+                for r in r24a
+            ]
+        except Exception as e:
+            logger.warning(f"[ch_tables] Q24a_query_errors failed: {e}")
+            ch_errors = []
+
+        try:
+            r24b = q(
+                "Q24b_merge_memory_errors",
+                "SELECT count() AS cnt "
+                "FROM system.text_log "
+                "WHERE level IN ('Error','Fatal') "
+                "  AND message LIKE '%Memory limit%merge%' "
+                "  AND event_time >= now() - INTERVAL 1 HOUR",
+            )
+            merge_mem_errors = int(r24b[0][0]) if r24b else 0
+            if merge_mem_errors > 0:
+                ch_errors.append({
+                    "error": "MERGE_MEMORY_LIMIT", "count": merge_mem_errors,
+                    "status": "critical" if merge_mem_errors > 5 else "warn",
+                })
+        except Exception as e:
+            logger.warning(f"[ch_tables] Q24b_merge_memory_errors failed: {e}")
+            merge_mem_errors = 0
+
+        logger.info(f"[ch_tables] Q24 ch_errors: {len(ch_errors)} error type(s)")
+
         _timed("ch_tables", t0)
         return {
             "unused_kafka_tables": {
@@ -897,6 +1042,33 @@ async def check_clickhouse_tables() -> dict:
                 "expected_replicas": 2,
             },
             "kafka_engine_partitions": kafka_engine_partitions,
+            "kafka_pipeline_health": {
+                "tables": kafka_pipeline,
+                "status": "error" if any(r["never_committed"] for r in stale)
+                          else "warn" if stale else "ok",
+                "detail": f"{len(stale)} stale/never-committed table(s)"
+                          if stale else f"{len(kafka_pipeline)} tables · all active",
+            },
+            "ingestion_rate": {
+                "tables": ingestion,
+                "status": "warn" if stopped_tables else "ok",
+                "detail": f"{len(stopped_tables)} table(s) stopped inserting"
+                          if stopped_tables else f"{len(ingestion)} tables · all ingesting",
+            },
+            "replica_exceptions": {
+                "tables": replica_exceptions,
+                "status": "critical" if any(r["status"] == "critical" for r in replica_exceptions)
+                          else "warn" if replica_exceptions else "ok",
+                "detail": f"{len(replica_exceptions)} replica exception(s)"
+                          if replica_exceptions else "No replica exceptions",
+            },
+            "ch_errors": {
+                "errors": ch_errors,
+                "status": "critical" if any(r["status"] == "critical" for r in ch_errors)
+                          else "warn" if ch_errors else "ok",
+                "detail": f"{len(ch_errors)} error type(s) in last hour"
+                          if ch_errors else "No errors in last hour",
+            },
         }
     except Exception as e:
         logger.error(f"[ch_tables] EXCEPTION: {e}\n{traceback.format_exc()}")
