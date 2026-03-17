@@ -92,7 +92,7 @@ function ReplicaInconsistencyRow({ replicaIncons }) {
     <ChCheckRow
       icon="🔂" label="Keeper Replica Inconsistency"
       status={replicaIncons.status} detail={replicaIncons.detail}
-      tip="Tables where actual replica count differs from expected cluster replicas"
+      tip="Tables where the actual replica count across the cluster is less than the expected 2 replicas. Detected via clusterAllReplicas(). Indicates a replica is missing or not registered in Keeper (ZooKeeper)."
     >
       {total > 0 && (
         <div>
@@ -185,7 +185,7 @@ export default function ClickHousePanel({ checks }) {
         <ChCheckRow
           icon="📭" label="Unused Kafka Engine Tables"
           status={unusedKafka.status} detail={unusedKafka.detail}
-          tip="Kafka consumer tables in system.kafka_consumers with last_commit_time=epoch — never consumed"
+          tip="Kafka Engine tables whose last_commit_time is still epoch (1970). These tables exist but have never consumed a single message — likely misconfigured or abandoned."
         >
           {(unusedKafka.tables || []).length > 0 && (
             <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
@@ -204,7 +204,7 @@ export default function ClickHousePanel({ checks }) {
         <ChCheckRow
           icon="🔒" label="Read-Only Replicated Tables"
           status={readOnly.status} detail={readOnly.detail}
-          tip="Replicated MergeTree tables stuck in read-only mode — writes will fail"
+          tip="ReplicatedMergeTree tables in is_readonly=1 state. These tables reject all INSERT/ALTER operations. Usually caused by lost ZooKeeper connection or missing replica path."
         >
           {(readOnly.tables || []).length > 0 && (
             <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.68rem', fontFamily:'var(--mono)' }}>
@@ -226,7 +226,7 @@ export default function ClickHousePanel({ checks }) {
         <ChCheckRow
           icon="💤" label="Inactive DDL Queries"
           status={inactiveQ.status} detail={inactiveQ.detail}
-          tip="DDL operations stuck in 'Inactive' state in system.distributed_ddl_queue"
+          tip="DDL queries (CREATE/DROP/ALTER) stuck in Inactive state in system.distributed_ddl_queue. These block schema changes cluster-wide until resolved or manually removed."
         >
           {(inactiveQ.queries || []).length > 0 && (
             <div>{(inactiveQ.queries||[]).map((q,i)=>(
@@ -242,7 +242,7 @@ export default function ClickHousePanel({ checks }) {
         <ChCheckRow
           icon="⚗️" label="Long-Running Mutations (>30min)"
           status={longMut.status} detail={longMut.detail}
-          tip="ALTER TABLE mutations that have been running for more than 30 minutes"
+          tip="ALTER TABLE mutations (UPDATE/DELETE/column changes) running for more than 30 minutes. Threshold: 30 min. Long mutations hold resources and slow down merges."
         >
           {(longMut.mutations || []).length > 0 && (
             <div>
@@ -266,7 +266,7 @@ export default function ClickHousePanel({ checks }) {
         <ChCheckRow
           icon="⏱️" label="Tables Without TTL Policy"
           status={noTTL.status} detail={noTTL.detail}
-          tip="MergeTree tables without a table-level TTL — disk will grow unbounded"
+          tip="MergeTree tables with no TTL policy defined. Without TTL, data is never automatically deleted and disk usage grows indefinitely. Add TTL to control data retention."
         >
           {(noTTL.tables || []).length > 0 && (
             <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
@@ -285,7 +285,7 @@ export default function ClickHousePanel({ checks }) {
         <ChCheckRow
           icon="💀" label="Detached / Corrupted Parts"
           status={detached.status} detail={detached.detail}
-          tip="Data parts detached due to corruption, checksum mismatch etc. — data integrity issue"
+          tip="Data parts moved to the detached/ folder due to corruption, checksum errors, or manual detach. Detached parts are excluded from queries — data may be lost or unreadable."
         >
           {(detached.parts || []).length > 0 && (
             <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.68rem', fontFamily:'var(--mono)' }}>
@@ -310,7 +310,7 @@ export default function ClickHousePanel({ checks }) {
         <ChCheckRow
           icon="📊" label="Top Table Sizes"
           status={tableSizes.status} detail={tableSizes.detail}
-          tip="Top 5 largest tables per database — disk growth awareness"
+          tip="Top 5 tables by compressed disk usage from system.parts. Useful for tracking which tables consume the most storage and planning capacity."
         >
           {(tableSizes.tables || []).length > 0 && (
             <div style={{ paddingTop:4 }}>
@@ -330,7 +330,7 @@ export default function ClickHousePanel({ checks }) {
         <ChCheckRow
           icon="🔁" label="Replication Queue Stuck Jobs"
           status={replStuck.status} detail={replStuck.detail}
-          tip="Replication queue entries postponed >100 times — replication degraded"
+          tip="Replication queue entries postponed more than 100 times (threshold: 100). High postpone counts mean a replica is consistently failing to replicate — data may fall behind."
         >
           {(replStuck.jobs || []).length > 0 && (
             <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.68rem', fontFamily:'var(--mono)' }}>

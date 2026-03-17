@@ -115,11 +115,13 @@ export function Tip({ text }) {
       <span style={{ fontSize:'0.7rem', color:'var(--muted)', cursor:'help', padding:'0 4px' }}>ⓘ</span>
       {vis && (
         <span style={{
-          position:'absolute', bottom:'calc(100% + 6px)', right:0,
+          position:'absolute', bottom:'calc(100% + 6px)', left:'50%',
+          transform:'translateX(-50%)',
           background:'#0d1526', border:'1px solid var(--border)', borderRadius:7,
-          padding:'6px 10px', fontSize:'0.7rem', color:'var(--muted)',
-          whiteSpace:'nowrap', zIndex:100, maxWidth:300, fontFamily:'var(--mono)',
-          boxShadow:'0 4px 16px rgba(0,0,0,0.5)',
+          padding:'8px 12px', fontSize:'0.7rem', color:'var(--muted)',
+          whiteSpace:'normal', zIndex:9999, width:260, fontFamily:'var(--mono)',
+          boxShadow:'0 4px 20px rgba(0,0,0,0.6)', lineHeight:1.7,
+          pointerEvents:'none',
         }}>{text}</span>
       )}
     </span>
