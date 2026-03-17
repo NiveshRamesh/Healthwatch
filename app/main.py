@@ -187,19 +187,24 @@ def _sync_kafka_live_and_lag() -> dict:
     """
     Queries the Kafka broker directly (no ClickHouse dependency) to produce:
 
-    topic_live_status  — per-topic: has_data, is_live, total_messages
+    topic_live_status      — per-topic: has_data, is_live, total_messages
       - live  : has messages AND at least one message produced in the last
                 KAFKA_LIVE_WINDOW_MINUTES minutes
       - stale : has messages but nothing new within the live window
       - empty : LOG-END-OFFSET == BEGINNING-OFFSET (no messages ever / all deleted)
 
-    consumer_lag — per-topic: total_lag, max_lag, groups dict
+    consumer_lag           — per-topic: total_lag, max_lag, groups dict
       - ClickHouse Kafka Engine consumers commit offset=-1 to __consumer_offsets;
-        we treat those as lag=0 (CH manages offsets internally).
+        we record them as lag=0 here; real CH engine lag is computed later by
+        cross-referencing with system.kafka_consumers committed_offset.
+
+    partition_end_offsets  — {topic: {partition: end_offset}}
+      - used by run_all_checks() to compute CH Kafka engine lag without an extra
+        Kafka connection.
     """
     from kafka import KafkaAdminClient, KafkaConsumer, TopicPartition
 
-    result: dict = {"topic_live_status": {}, "consumer_lag": {}}
+    result: dict = {"topic_live_status": {}, "consumer_lag": {}, "partition_end_offsets": {}}
     client_cfg = dict(
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
         request_timeout_ms=10_000,
@@ -255,6 +260,10 @@ def _sync_kafka_live_and_lag() -> dict:
 
         end_offsets   = consumer.end_offsets(tps)
         begin_offsets = consumer.beginning_offsets(tps)
+
+        # Store per-partition end offsets for CH Kafka engine lag cross-reference
+        for tp, end in end_offsets.items():
+            result["partition_end_offsets"].setdefault(tp.topic, {})[tp.partition] = end or 0
 
         threshold_ms = int((time.time() - KAFKA_LIVE_WINDOW_MINUTES * 60) * 1000)
         at_threshold = consumer.offsets_for_times({tp: threshold_ms for tp in tps})
@@ -796,6 +805,26 @@ async def check_clickhouse_tables() -> dict:
             logger.warning(f"[ch_tables] Q19_replica_inconsistency skipped: {e}")
             inconsistent = []
 
+        # Q20 — CH Kafka engine committed offsets (for lag cross-ref with Kafka)
+        try:
+            r20 = q(
+                "Q20_kafka_engine_offsets",
+                "SELECT database, table, topic_id, partition_id, committed_offset "
+                "FROM system.kafka_consumers "
+                "ARRAY JOIN assignments.topic_id AS topic_id, "
+                "           assignments.partition_id AS partition_id, "
+                "           assignments.committed_offset AS committed_offset "
+                "WHERE database NOT IN ('system','information_schema','INFORMATION_SCHEMA')",
+            )
+            kafka_engine_partitions = [
+                {"db": r[0], "table": r[1], "topic": r[2], "partition": r[3], "committed": r[4]}
+                for r in r20
+            ]
+            logger.info(f"[ch_tables] kafka_engine_partitions: {len(kafka_engine_partitions)}")
+        except Exception as e:
+            logger.warning(f"[ch_tables] Q20_kafka_engine_offsets skipped: {e}")
+            kafka_engine_partitions = []
+
         _timed("ch_tables", t0)
         return {
             "unused_kafka_tables": {
@@ -862,6 +891,7 @@ async def check_clickhouse_tables() -> dict:
                 else "All replicas consistent",
                 "expected_replicas": 2,
             },
+            "kafka_engine_partitions": kafka_engine_partitions,
         }
     except Exception as e:
         logger.error(f"[ch_tables] EXCEPTION: {e}\n{traceback.format_exc()}")
@@ -1294,6 +1324,61 @@ async def run_all_checks():
         ) = results
         ch_merged = {**safe(ch_conn, "CH Connection")}
         ch_merged["__ch_tables__"] = safe(ch_tables, "CH Tables")
+
+        # ── Cross-reference CH Kafka engine offsets with Kafka partition end-offsets ──
+        # ClickHouse Kafka engine consumers commit offset=-1 to Kafka's __consumer_offsets,
+        # so they showed as lag=0 in consumer_lag. Real lag is computed here by comparing
+        # system.kafka_consumers committed_offset against Kafka's actual end offset.
+        if not isinstance(kafka, Exception) and not isinstance(ch_tables, Exception):
+            kafka_part_ends = (kafka.get("__details__", {})
+                                    .get("partition_end_offsets", {}))
+            ch_eng_parts    = ch_tables.get("kafka_engine_partitions", [])
+
+            # per-CH-table lag: "{db}.{table}" -> {total_lag, max_lag, topics: {topic: lag}}
+            ch_kafka_lag   = {}
+            # per-topic aggregated CH engine lag (for injecting into Kafka consumer_lag)
+            topic_ch_lag   = {}
+
+            for p in ch_eng_parts:
+                end       = kafka_part_ends.get(p["topic"], {}).get(p["partition"], 0)
+                committed = p["committed"]
+                lag       = max(0, end - committed) if committed >= 0 else 0
+
+                key = f"{p['db']}.{p['table']}"
+                if key not in ch_kafka_lag:
+                    ch_kafka_lag[key] = {"total_lag": 0, "max_lag": 0, "topics": {}}
+                ch_kafka_lag[key]["total_lag"] += lag
+                ch_kafka_lag[key]["max_lag"]    = max(ch_kafka_lag[key]["max_lag"], lag)
+                ch_kafka_lag[key]["topics"][p["topic"]] = (
+                    ch_kafka_lag[key]["topics"].get(p["topic"], 0) + lag
+                )
+                topic_ch_lag[p["topic"]] = topic_ch_lag.get(p["topic"], 0) + lag
+
+            # Add per-table lag to ClickHouse section
+            ch_merged["__ch_tables__"]["ch_kafka_lag"] = ch_kafka_lag
+
+            # Inject real CH engine lag into Kafka consumer_lag
+            # (previously these topics had lag=0 because CH commits offset=-1)
+            cl = kafka.get("__details__", {}).get("consumer_lag", {})
+            for topic, lag in topic_ch_lag.items():
+                if topic in cl:
+                    cl[topic]["total_lag"] += lag
+                    cl[topic]["max_lag"]    = max(cl[topic]["max_lag"], lag)
+                    cl[topic]["groups"]["⚡ CH Kafka Engine"] = lag
+                else:
+                    cl[topic] = {
+                        "total_lag": lag, "max_lag": lag,
+                        "groups": {"⚡ CH Kafka Engine": lag},
+                    }
+
+            # Re-compute Consumer Lag summary in kafka result
+            high_lag   = sum(1 for v in cl.values() if v["total_lag"] > KAFKA_LAG_WARN_THRESHOLD)
+            lag_status = "warn" if high_lag > 0 else "ok"
+            lag_detail = (f"{high_lag} topic(s) high lag" if high_lag
+                          else f"{len(cl)} topics · all lag normal")
+            if "Consumer Lag" in kafka:
+                kafka["Consumer Lag"]["status"] = lag_status
+                kafka["Consumer Lag"]["detail"] = lag_detail
 
         last_result = {
             "clickhouse": ch_merged,

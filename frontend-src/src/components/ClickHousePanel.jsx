@@ -141,6 +141,64 @@ function ReplicaInconsistencyRow({ replicaIncons }) {
   );
 }
 
+/* ── CH Kafka Engine Lag section ──────────────────────────────────── */
+function ChKafkaEngineLag({ chKafkaLag }) {
+  const rows = Object.entries(chKafkaLag || {})
+    .sort((a, b) => b[1].total_lag - a[1].total_lag);
+
+  const anyHigh = rows.some(([, v]) => v.total_lag > 10000);
+  const status  = anyHigh ? 'warn' : 'ok';
+  const detail  = rows.length === 0
+    ? 'No Kafka engine tables'
+    : anyHigh
+      ? `${rows.filter(([, v]) => v.total_lag > 10000).length} table(s) high lag`
+      : `${rows.length} table(s) · all lag normal`;
+
+  return (
+    <ChCheckRow
+      icon="⚡" label="Kafka Engine Consumer Lag"
+      status={status} detail={detail}
+      tip="How far behind each ClickHouse Kafka Engine table is from the Kafka topic's latest offset. Computed from system.kafka_consumers committed_offset vs Kafka end_offset. High lag (>10,000) means ClickHouse is not keeping up with the incoming message rate."
+    >
+      {rows.length > 0 && (
+        <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.68rem', fontFamily:'var(--mono)' }}>
+          <thead><tr>
+            {['CH Table','Topics','Total Lag','Status'].map(h => (
+              <th key={h} style={{ textAlign:'left', padding:'4px 8px', color:'var(--muted)',
+                borderBottom:'1px solid var(--border)' }}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {rows.map(([key, v], i) => {
+              const isHigh = v.total_lag > 10000;
+              const topics = Object.keys(v.topics || {}).join(', ') || '—';
+              return (
+                <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(30,45,69,0.3)' }}>
+                  <td style={{ padding:'4px 8px', color:'var(--text)', fontWeight:600 }}>{key}</td>
+                  <td style={{ padding:'4px 8px', color:'var(--muted)', fontSize:'0.62rem',
+                    maxWidth:220, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}
+                    title={topics}>{topics}</td>
+                  <td style={{ padding:'4px 8px',
+                    color: isHigh ? 'var(--warn)' : 'var(--ok)',
+                    fontWeight: isHigh ? 700 : 400 }}>{fmt(v.total_lag)}</td>
+                  <td style={{ padding:'4px 8px' }}>
+                    <span style={{
+                      display:'inline-flex', alignItems:'center', padding:'1px 6px',
+                      borderRadius:3, fontSize:'0.62rem', fontWeight:700,
+                      background: isHigh ? 'rgba(245,158,11,0.15)' : 'rgba(16,185,129,0.15)',
+                      color: isHigh ? 'var(--warn)' : 'var(--ok)',
+                    }}>{isHigh ? 'HIGH LAG' : 'OK'}</span>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </ChCheckRow>
+  );
+}
+
 /* ── Main ClickHouse Panel ────────────────────────────────────────── */
 export default function ClickHousePanel({ checks }) {
   const chTables = checks.__ch_tables__ || {};
@@ -155,6 +213,7 @@ export default function ClickHousePanel({ checks }) {
   const tableSizes    = chTables.table_sizes            || {};
   const replStuck     = chTables.replication_stuck_jobs || {};
   const replicaIncons = chTables.replica_inconsistency  || {};
+  const chKafkaLag    = chTables.ch_kafka_lag           || {};
 
   const maxBytes = Math.max(...(tableSizes.tables || []).map(t => t.bytes || 0), 1);
 
@@ -177,11 +236,16 @@ export default function ClickHousePanel({ checks }) {
             {['warn'].includes(unusedKafka.status)           && <Chip n={unusedKafka.count}        color="245,158,11" label="warn" />}
             {['warn'].includes(noTTL.status)                 && <Chip n={noTTL.tables?.length}     color="245,158,11" label="warn" />}
             {['warn'].includes(longMut.status)               && <Chip n={longMut.mutations?.length} color="245,158,11" label="warn" />}
+            {Object.values(chKafkaLag).some(v => v.total_lag > 10000) &&
+              <Chip n={Object.values(chKafkaLag).filter(v => v.total_lag > 10000).length} color="245,158,11" label="kafka lag" />}
           </span>
         }
       >
 
-        {/* #11 Unused Kafka engine tables */}
+        {/* Kafka Engine Consumer Lag */}
+        <ChKafkaEngineLag chKafkaLag={chKafkaLag} />
+
+        {/* #11 Unused Kafka Engine Tables */}
         <ChCheckRow
           icon="📭" label="Unused Kafka Engine Tables"
           status={unusedKafka.status} detail={unusedKafka.detail}
