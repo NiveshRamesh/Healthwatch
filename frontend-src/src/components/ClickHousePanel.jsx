@@ -78,6 +78,69 @@ function SizeBar({ label, size, bytes, maxBytes }) {
   );
 }
 
+/* ── Paginated replica inconsistency row ─────────────────────────── */
+const PAGE_SIZE = 10;
+
+function ReplicaInconsistencyRow({ replicaIncons }) {
+  const [page, setPage] = useState(0);
+  const rows  = replicaIncons.tables || [];
+  const total = rows.length;
+  const pages = Math.ceil(total / PAGE_SIZE);
+  const slice = rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+  return (
+    <ChCheckRow
+      icon="🔂" label="Keeper Replica Inconsistency"
+      status={replicaIncons.status} detail={replicaIncons.detail}
+      tip="Tables where actual replica count differs from expected cluster replicas"
+    >
+      {total > 0 && (
+        <div>
+          <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.68rem', fontFamily:'var(--mono)' }}>
+            <thead><tr>
+              {['Table','Expected','Actual'].map(h => (
+                <th key={h} style={{ textAlign:'left', padding:'4px 8px', color:'var(--muted)',
+                  borderBottom:'1px solid var(--border)' }}>{h}</th>
+              ))}
+            </tr></thead>
+            <tbody>{slice.map((t, i) => (
+              <tr key={i} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(239,68,68,0.03)' }}>
+                <td style={{ padding:'4px 8px' }}>{t.table}</td>
+                <td style={{ padding:'4px 8px', color:'var(--ok)' }}>{replicaIncons.expected_replicas}</td>
+                <td style={{ padding:'4px 8px', color:'var(--error)', fontWeight:700 }}>{t.actual_replicas}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+
+          {pages > 1 && (
+            <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
+              marginTop:8, fontFamily:'var(--mono)', fontSize:'0.65rem', color:'var(--muted)' }}>
+              <span>Showing {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}</span>
+              <div style={{ display:'flex', gap:6 }}>
+                <button onClick={() => setPage(p => p - 1)} disabled={page === 0}
+                  style={{ padding:'2px 10px', borderRadius:4, border:'1px solid var(--border)',
+                    background: page === 0 ? 'transparent' : 'var(--surface)',
+                    color: page === 0 ? 'var(--muted)' : 'var(--text)',
+                    cursor: page === 0 ? 'default' : 'pointer', fontFamily:'var(--mono)', fontSize:'0.65rem' }}>
+                  ← Prev
+                </button>
+                <span style={{ padding:'2px 6px', alignSelf:'center' }}>{page + 1} / {pages}</span>
+                <button onClick={() => setPage(p => p + 1)} disabled={page >= pages - 1}
+                  style={{ padding:'2px 10px', borderRadius:4, border:'1px solid var(--border)',
+                    background: page >= pages - 1 ? 'transparent' : 'var(--surface)',
+                    color: page >= pages - 1 ? 'var(--muted)' : 'var(--text)',
+                    cursor: page >= pages - 1 ? 'default' : 'pointer', fontFamily:'var(--mono)', fontSize:'0.65rem' }}>
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </ChCheckRow>
+  );
+}
+
 /* ── Main ClickHouse Panel ────────────────────────────────────────── */
 export default function ClickHousePanel({ checks }) {
   const chTables = checks.__ch_tables__ || {};
@@ -124,16 +187,15 @@ export default function ClickHousePanel({ checks }) {
           status={unusedKafka.status} detail={unusedKafka.detail}
           tip="Kafka consumer tables in system.kafka_consumers with last_commit_time=epoch — never consumed"
         >
-          {unusedKafka.count > 0 && (
-            <div>
-              <p style={{ fontSize:'0.72rem', color:'var(--warn)', marginBottom:6, fontFamily:'var(--mono)' }}>
-                ⚠ {unusedKafka.count} tables never committed since epoch
-              </p>
-              <div style={{ background:'#060910', borderRadius:6, padding:'8px 12px',
-                fontFamily:'var(--mono)', fontSize:'0.62rem', color:'#7eb8f7', lineHeight:1.7 }}>
-                <div style={{ color:'var(--muted)', marginBottom:3 }}># Run to list them:</div>
-                {unusedKafka.remedy}
-              </div>
+          {(unusedKafka.tables || []).length > 0 && (
+            <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
+              {(unusedKafka.tables || []).map((t, i) => (
+                <span key={i} style={{
+                  background:'rgba(245,158,11,0.1)', border:'1px solid rgba(245,158,11,0.25)',
+                  color:'var(--warn)', borderRadius:4, padding:'2px 7px',
+                  fontFamily:'var(--mono)', fontSize:'0.62rem',
+                }}>{t.database}.{t.table}</span>
+              ))}
             </div>
           )}
         </ChCheckRow>
@@ -286,27 +348,8 @@ export default function ClickHousePanel({ checks }) {
           )}
         </ChCheckRow>
 
-        {/* #19 Replica inconsistency */}
-        <ChCheckRow
-          icon="🔂" label="Keeper Replica Inconsistency"
-          status={replicaIncons.status} detail={replicaIncons.detail}
-          tip="Tables where actual replica count differs from expected cluster replicas"
-        >
-          {(replicaIncons.tables || []).length > 0 && (
-            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.68rem', fontFamily:'var(--mono)' }}>
-              <thead><tr>
-                {['Table','Expected','Actual'].map(h=>(
-                  <th key={h} style={{ textAlign:'left', padding:'4px 8px', color:'var(--muted)', borderBottom:'1px solid var(--border)' }}>{h}</th>
-                ))}
-              </tr></thead>
-              <tbody>{(replicaIncons.tables||[]).map((t,i)=>(
-                <tr key={i}><td style={{ padding:'4px 8px' }}>{t.table}</td>
-                <td style={{ padding:'4px 8px', color:'var(--ok)' }}>{replicaIncons.expected_replicas}</td>
-                <td style={{ padding:'4px 8px', color:'var(--error)', fontWeight:700 }}>{t.actual_replicas}</td></tr>
-              ))}</tbody>
-            </table>
-          )}
-        </ChCheckRow>
+        {/* #19 Replica inconsistency — paginated */}
+        <ReplicaInconsistencyRow replicaIncons={replicaIncons} />
 
       </SubSection>
     </>
