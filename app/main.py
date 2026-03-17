@@ -1360,9 +1360,22 @@ async def trigger_checks(background_tasks: BackgroundTasks):
     return {"message": "Health checks triggered"}
 
 
+def _fmt_retention(ms: int) -> str:
+    """Convert retention milliseconds to a human-readable string."""
+    secs = ms // 1000
+    if secs < 3600:
+        return f"{secs // 60} min"
+    hours = secs / 3600
+    if hours < 48:
+        return f"{hours:.1f} hrs ({ms:,} ms)"
+    days = hours / 24
+    return f"{days:.1f} days ({ms:,} ms)"
+
+
 def _sync_topic_detail(topic_name: str) -> dict:
-    """Fetch per-partition offsets + liveness directly from Kafka broker."""
-    from kafka import KafkaConsumer, TopicPartition
+    """Fetch per-partition offsets + liveness + retention directly from Kafka broker."""
+    from kafka import KafkaConsumer, KafkaAdminClient, TopicPartition
+    from kafka.admin import ConfigResource, ConfigResourceType
 
     cfg = dict(
         bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
@@ -1370,6 +1383,7 @@ def _sync_topic_detail(topic_name: str) -> dict:
         client_id="healthwatch-inspect",
     )
     consumer = KafkaConsumer(**cfg)
+    admin    = KafkaAdminClient(**cfg)
     try:
         partitions = consumer.partitions_for_topic(topic_name)
         if not partitions:
@@ -1397,7 +1411,23 @@ def _sync_topic_detail(topic_name: str) -> dict:
             })
             total += msgs
 
-        # pull cached consumer lag for this topic
+        # ── Fetch topic retention config ──────────────────────────────────────
+        retention_str = "Broker default"
+        try:
+            cfg_resources = [ConfigResource(ConfigResourceType.TOPIC, topic_name)]
+            configs = admin.describe_configs(cfg_resources)
+            # describe_configs returns a list of futures/results depending on version
+            for resource, config_entries in configs.items():
+                for entry in config_entries.values():
+                    if entry.name == "retention.ms":
+                        val = int(entry.value)
+                        if val > 0:
+                            retention_str = _fmt_retention(val)
+                        break
+        except Exception as e:
+            logger.warning(f"[topic_detail] retention fetch failed: {e}")
+
+        # ── Pull cached consumer lag for this topic ───────────────────────────
         cached = (
             last_result.get("kafka", {})
             .get("__details__", {})
@@ -1410,11 +1440,13 @@ def _sync_topic_detail(topic_name: str) -> dict:
             "topic": topic_name,
             "total_messages": total,
             "info": {"partition_count": len(partitions), "replication_factor": "—"},
+            "retention": {"retention_ms": retention_str},
             "lag":  cached,
             "partition_offsets": parts,
         }
     finally:
         consumer.close()
+        admin.close()
 
 
 @app.get("/api/topic/{topic_name}")
