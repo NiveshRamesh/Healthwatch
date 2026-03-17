@@ -688,12 +688,22 @@ async def check_clickhouse_tables() -> dict:
         if readonly:
             logger.warning(f"[ch_tables] readonly tables: {readonly}")
 
-        r13 = q(
-            "Q13_inactive_ddl",
-            "SELECT query,status,initiator FROM system.distributed_ddl_queue "
-            "WHERE status='Inactive' LIMIT 20",
-        )
-        inactive_ddl = [{"query": r[0], "status": r[1], "initiator": r[2]} for r in r13]
+        # 'initiator' column was removed in ClickHouse 25.x; use initiator_host if present,
+        # otherwise fall back to selecting only query + status
+        try:
+            r13 = q(
+                "Q13_inactive_ddl",
+                "SELECT query,status,initiator_host FROM system.distributed_ddl_queue "
+                "WHERE status='Inactive' LIMIT 20",
+            )
+            inactive_ddl = [{"query": r[0], "status": r[1], "initiator": r[2]} for r in r13]
+        except Exception:
+            r13 = q(
+                "Q13_inactive_ddl_fallback",
+                "SELECT query,status FROM system.distributed_ddl_queue "
+                "WHERE status='Inactive' LIMIT 20",
+            )
+            inactive_ddl = [{"query": r[0], "status": r[1], "initiator": ""} for r in r13]
 
         r14 = q(
             "Q14_long_mutations",
