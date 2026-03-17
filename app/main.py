@@ -813,7 +813,7 @@ async def check_clickhouse_tables() -> dict:
             r20 = q(
                 "Q20_kafka_engine_offsets",
                 "SELECT database, table, "
-                "       `assignments.topic_id`, `assignments.partition_id`, `assignments.committed_offset` "
+                "       `assignments.topic`, `assignments.partition_id`, `assignments.current_offset` "
                 "FROM system.kafka_consumers "
                 "WHERE database NOT IN ('system','information_schema','INFORMATION_SCHEMA')",
             )
