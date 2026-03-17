@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { Badge, SubSection, Chip, Tip } from './Shared';
+import { Badge, SubSection, Chip } from './Shared';
 
-/* ── Single pod row — expandable ─────────────────────────────────── */
+/* ── Single pod card — compact, 2-col grid layout ────────────────── */
 function PodRow({ pod }) {
   const [open, setOpen] = useState(false);
   const { name, phase, containers, alerts, status } = pod;
@@ -10,68 +10,76 @@ function PodRow({ pod }) {
   const nonRunning    = containers.some(c => c.state !== 'running');
 
   return (
-    <div style={{ borderBottom:'1px solid rgba(30,45,69,0.4)' }}>
+    <div style={{
+      margin:4,
+      background:'var(--surface2)', borderRadius:8, overflow:'hidden',
+      border: status !== 'ok'
+        ? `1px solid rgba(${status === 'warn' ? '245,158,11' : '239,68,68'},0.3)`
+        : '1px solid var(--border)',
+    }}>
       <div
-        style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
-          padding:'10px 22px 10px 16px', cursor:'pointer' }}
         onClick={() => setOpen(o => !o)}
-        onMouseEnter={e => e.currentTarget.style.background='var(--surface2)'}
+        style={{ padding:'8px 10px', cursor:'pointer', display:'flex', alignItems:'flex-start', justifyContent:'space-between' }}
+        onMouseEnter={e => e.currentTarget.style.background='rgba(255,255,255,0.03)'}
         onMouseLeave={e => e.currentTarget.style.background='transparent'}
       >
-        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-          <span style={{ fontFamily:'var(--mono)', fontSize:'0.75rem', color:'var(--text)' }}>{name}</span>
-          <span style={{ fontFamily:'var(--mono)', fontSize:'0.62rem',
-            color: phase === 'Running' ? 'var(--ok)' : phase === 'Pending' ? 'var(--warn)' : 'var(--error)',
-            background:'var(--surface3)', borderRadius:4, padding:'1px 6px' }}>{phase}</span>
-          {totalRestarts > 0 && (
-            <span style={{ fontFamily:'var(--mono)', fontSize:'0.62rem', color:'var(--warn)',
-              background:'rgba(245,158,11,0.1)', border:'1px solid rgba(245,158,11,0.3)',
-              borderRadius:4, padding:'1px 6px' }}>↺ {totalRestarts}</span>
-          )}
-          {missingLimits && (
-            <span style={{ fontFamily:'var(--mono)', fontSize:'0.62rem', color:'var(--warn)',
-              background:'rgba(245,158,11,0.1)', border:'1px solid rgba(245,158,11,0.3)',
-              borderRadius:4, padding:'1px 6px' }}>⚠ no limits</span>
-          )}
-          {nonRunning && (
-            <span style={{ fontFamily:'var(--mono)', fontSize:'0.62rem', color:'var(--error)',
-              background:'rgba(239,68,68,0.1)', border:'1px solid rgba(239,68,68,0.3)',
-              borderRadius:4, padding:'1px 6px' }}>⬤ not running</span>
-          )}
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ display:'flex', alignItems:'center', gap:5, flexWrap:'wrap' }}>
+            <span style={{ fontFamily:'var(--mono)', fontSize:'0.7rem', fontWeight:700, color:'var(--text)',
+              overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:140 }}>{name}</span>
+            <span style={{ fontFamily:'var(--mono)', fontSize:'0.58rem',
+              color: phase === 'Running' ? 'var(--ok)' : phase === 'Pending' ? 'var(--warn)' : 'var(--error)',
+              background:'var(--surface3)', borderRadius:3, padding:'1px 5px' }}>{phase}</span>
+          </div>
+          <div style={{ display:'flex', gap:4, marginTop:4, flexWrap:'wrap' }}>
+            {totalRestarts > 0 && (
+              <span style={{ fontFamily:'var(--mono)', fontSize:'0.58rem', color:'var(--warn)',
+                background:'rgba(245,158,11,0.1)', border:'1px solid rgba(245,158,11,0.3)',
+                borderRadius:3, padding:'1px 5px' }}>↺ {totalRestarts}</span>
+            )}
+            {missingLimits && (
+              <span style={{ fontFamily:'var(--mono)', fontSize:'0.58rem', color:'var(--warn)',
+                background:'rgba(245,158,11,0.1)', border:'1px solid rgba(245,158,11,0.3)',
+                borderRadius:3, padding:'1px 5px' }}>⚠ no limits</span>
+            )}
+            {nonRunning && (
+              <span style={{ fontFamily:'var(--mono)', fontSize:'0.58rem', color:'var(--error)',
+                background:'rgba(239,68,68,0.1)', border:'1px solid rgba(239,68,68,0.3)',
+                borderRadius:3, padding:'1px 5px' }}>⬤ not running</span>
+            )}
+          </div>
         </div>
-        <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+        <div style={{ display:'flex', alignItems:'center', gap:4, flexShrink:0 }}>
           <Badge status={status} size="sm" />
-          <span style={{ color:'var(--muted)', fontSize:'0.65rem', transition:'transform 0.2s',
+          <span style={{ color:'var(--muted)', fontSize:'0.6rem', transition:'transform 0.2s',
             transform: open ? 'rotate(180deg)' : 'none' }}>▼</span>
         </div>
       </div>
 
       {open && (
-        <div style={{ background:'var(--surface2)', padding:'10px 22px 14px 24px',
+        <div style={{ background:'var(--surface3)', padding:'8px 10px',
           borderTop:'1px solid var(--border)', animation:'fadeIn 0.2s ease' }}>
           {containers.map((c, i) => (
             <div key={i} style={{
-              background:'var(--surface3)', borderRadius:7, padding:'8px 12px', marginBottom:6,
+              background:'var(--surface)', borderRadius:5, padding:'6px 8px', marginBottom:4,
               border: c.restarts > 10 ? '1px solid rgba(245,158,11,0.3)' : '1px solid transparent',
             }}>
-              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
-                <span style={{ fontFamily:'var(--mono)', fontSize:'0.7rem', fontWeight:700 }}>{c.name}</span>
-                <span style={{ fontFamily:'var(--mono)', fontSize:'0.65rem',
-                  color: c.state === 'running' ? 'var(--ok)' : 'var(--warn)' }}>
-                  {c.state}
-                </span>
+              <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
+                <span style={{ fontFamily:'var(--mono)', fontSize:'0.65rem', fontWeight:700 }}>{c.name}</span>
+                <span style={{ fontFamily:'var(--mono)', fontSize:'0.6rem',
+                  color: c.state === 'running' ? 'var(--ok)' : 'var(--warn)' }}>{c.state}</span>
               </div>
-              <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:6 }}>
+              <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:4 }}>
                 {[
-                  ['Restarts', c.restarts, c.restarts > 10 ? 'var(--warn)' : 'var(--muted)'],
-                  ['CPU Limit', c.cpu_limit || '⚠ none', !c.cpu_limit ? 'var(--warn)' : 'var(--text)'],
-                  ['Mem Limit', c.mem_limit || '⚠ none', !c.mem_limit ? 'var(--warn)' : 'var(--text)'],
-                  ['CPU Req',   c.cpu_req   || '—',       'var(--muted)'],
+                  ['Restarts', c.restarts,         c.restarts > 10  ? 'var(--warn)'  : 'var(--muted)'],
+                  ['CPU Lim',  c.cpu_limit || '⚠', !c.cpu_limit     ? 'var(--warn)'  : 'var(--text)'],
+                  ['Mem Lim',  c.mem_limit || '⚠', !c.mem_limit     ? 'var(--warn)'  : 'var(--text)'],
+                  ['CPU Req',  c.cpu_req   || '—', 'var(--muted)'],
                 ].map(([lbl, val, color]) => (
                   <div key={lbl}>
-                    <div style={{ fontSize:'0.58rem', color:'var(--muted)', textTransform:'uppercase',
-                      letterSpacing:'0.5px', fontFamily:'var(--mono)', marginBottom:2 }}>{lbl}</div>
-                    <div style={{ fontFamily:'var(--mono)', fontSize:'0.68rem', color }}>{val}</div>
+                    <div style={{ fontSize:'0.55rem', color:'var(--muted)', textTransform:'uppercase',
+                      letterSpacing:'0.5px', fontFamily:'var(--mono)', marginBottom:1 }}>{lbl}</div>
+                    <div style={{ fontFamily:'var(--mono)', fontSize:'0.62rem', color }}>{val}</div>
                   </div>
                 ))}
               </div>
@@ -83,30 +91,33 @@ function PodRow({ pod }) {
   );
 }
 
-/* ── PVC row ─────────────────────────────────────────────────────── */
+/* ── PVC compact card ─────────────────────────────────────────────── */
 function PVCRow({ pvc }) {
   const { name, phase, capacity, orphaned, status } = pvc;
   return (
     <div style={{
-      display:'flex', alignItems:'center', justifyContent:'space-between',
-      padding:'9px 22px 9px 16px', borderBottom:'1px solid rgba(30,45,69,0.4)',
-    }}
-      onMouseEnter={e => e.currentTarget.style.background='var(--surface2)'}
-      onMouseLeave={e => e.currentTarget.style.background='transparent'}
-    >
-      <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-        <span style={{ fontFamily:'var(--mono)', fontSize:'0.75rem' }}>{name}</span>
-        <span style={{ fontFamily:'var(--mono)', fontSize:'0.62rem',
-          color: phase === 'Bound' ? 'var(--ok)' : phase === 'Lost' ? 'var(--error)' : 'var(--warn)',
-          background:'var(--surface3)', borderRadius:4, padding:'1px 6px' }}>{phase}</span>
-        <span style={{ fontFamily:'var(--mono)', fontSize:'0.62rem', color:'var(--muted)' }}>{capacity}</span>
-        {orphaned && (
-          <span style={{ fontFamily:'var(--mono)', fontSize:'0.62rem', color:'var(--warn)',
-            background:'rgba(245,158,11,0.1)', border:'1px solid rgba(245,158,11,0.3)',
-            borderRadius:4, padding:'1px 6px' }}>
-            orphan <Tip text="PVC is bound but no pod mounts it — may be leftover from a deleted pod" />
-          </span>
-        )}
+      margin:4,
+      background:'var(--surface2)', borderRadius:7,
+      border: status !== 'ok'
+        ? `1px solid rgba(${status === 'warn' ? '245,158,11' : '239,68,68'},0.3)`
+        : '1px solid var(--border)',
+      padding:'8px 10px',
+      display:'flex', alignItems:'flex-start', justifyContent:'space-between',
+    }}>
+      <div>
+        <span style={{ fontFamily:'var(--mono)', fontSize:'0.7rem', fontWeight:600,
+          display:'block', marginBottom:4 }}>{name}</span>
+        <div style={{ display:'flex', gap:4, flexWrap:'wrap', alignItems:'center' }}>
+          <span style={{ fontFamily:'var(--mono)', fontSize:'0.58rem',
+            color: phase === 'Bound' ? 'var(--ok)' : phase === 'Lost' ? 'var(--error)' : 'var(--warn)',
+            background:'var(--surface3)', borderRadius:3, padding:'1px 5px' }}>{phase}</span>
+          <span style={{ fontFamily:'var(--mono)', fontSize:'0.58rem', color:'var(--muted)' }}>{capacity}</span>
+          {orphaned && (
+            <span style={{ fontFamily:'var(--mono)', fontSize:'0.58rem', color:'var(--warn)',
+              background:'rgba(245,158,11,0.1)', border:'1px solid rgba(245,158,11,0.3)',
+              borderRadius:3, padding:'1px 5px' }}>orphan</span>
+          )}
+        </div>
       </div>
       <Badge status={status} size="sm" />
     </div>
@@ -137,7 +148,9 @@ export default function PodsPVCsPanel({ data }) {
           </span>
         }
       >
-        {pods.map((p, i) => <PodRow key={i} pod={p} />)}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', padding:'4px 2px' }}>
+          {pods.map((p, i) => <PodRow key={i} pod={p} />)}
+        </div>
       </SubSection>
 
       <SubSection
@@ -152,7 +165,9 @@ export default function PodsPVCsPanel({ data }) {
           </span>
         }
       >
-        {pvcs.map((p, i) => <PVCRow key={i} pvc={p} />)}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', padding:'4px 2px' }}>
+          {pvcs.map((p, i) => <PVCRow key={i} pvc={p} />)}
+        </div>
       </SubSection>
     </>
   );

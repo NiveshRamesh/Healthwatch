@@ -1,5 +1,5 @@
 import React from 'react';
-import { Badge, ProgressBar, SubSection, Chip, InfoRow } from './Shared';
+import { Badge, SubSection, Chip, InfoRow } from './Shared';
 
 /* ── Node resource card ───────────────────────────────────────────── */
 function NodeCard({ node }) {
@@ -64,42 +64,48 @@ function NodeCard({ node }) {
   );
 }
 
-/* ── Pod resource table row ───────────────────────────────────────── */
+const STATUS_SORT = { critical:0, error:0, warn:1, ok:2 };
+
+/* ── Pod resource table row — compact single-line ─────────────────── */
 function PodResourceRow({ pod }) {
   const { pod: name, cpu_used_pct, memory_used_pct, status } = pod;
   const cpuStatus = cpu_used_pct  >= 90 ? 'critical' : cpu_used_pct  >= 70 ? 'warn' : 'ok';
   const memStatus = memory_used_pct >= 90 ? 'critical' : memory_used_pct >= 80 ? 'warn' : 'ok';
+  const cpuColor  = cpuStatus === 'ok' ? 'var(--ok)' : cpuStatus === 'warn' ? 'var(--warn)' : 'var(--error)';
+  const memColor  = memStatus === 'ok' ? 'var(--ok)' : memStatus === 'warn' ? 'var(--warn)' : 'var(--error)';
 
   return (
     <div style={{
-      display:'grid', gridTemplateColumns:'2fr 1fr 1fr 80px',
-      alignItems:'center', gap:12,
-      padding:'9px 22px 9px 16px', borderBottom:'1px solid rgba(30,45,69,0.4)',
+      display:'grid', gridTemplateColumns:'1.8fr 1fr 1fr 56px',
+      alignItems:'center', gap:8,
+      padding:'6px 14px 6px 16px', borderBottom:'1px solid rgba(30,45,69,0.4)',
     }}
       onMouseEnter={e => e.currentTarget.style.background='var(--surface2)'}
       onMouseLeave={e => e.currentTarget.style.background='transparent'}
     >
-      <span style={{ fontFamily:'var(--mono)', fontSize:'0.72rem' }}>{name}</span>
-      <div>
-        <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
-          <span style={{ fontFamily:'var(--mono)', fontSize:'0.6rem', color:'var(--muted)' }}>CPU</span>
-          <span style={{ fontFamily:'var(--mono)', fontSize:'0.6rem',
-            color: cpuStatus === 'ok' ? 'var(--ok)' : cpuStatus === 'warn' ? 'var(--warn)' : 'var(--error)' }}>
-            {cpu_used_pct?.toFixed(1)}%
-          </span>
+      <span style={{ fontFamily:'var(--mono)', fontSize:'0.68rem',
+        overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{name}</span>
+
+      <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+        <span style={{ fontFamily:'var(--mono)', fontSize:'0.55rem', color:'var(--muted)', minWidth:22 }}>CPU</span>
+        <div style={{ flex:1, height:4, background:'var(--surface3)', borderRadius:999, overflow:'hidden', minWidth:28 }}>
+          <div style={{ height:'100%', width:`${Math.min(100,cpu_used_pct||0)}%`, background:cpuColor, borderRadius:999 }} />
         </div>
-        <ProgressBar pct={cpu_used_pct} status={cpuStatus} height={4} showLabel={false} />
+        <span style={{ fontFamily:'var(--mono)', fontSize:'0.6rem', color:cpuColor, minWidth:34, textAlign:'right' }}>
+          {(cpu_used_pct||0).toFixed(1)}%
+        </span>
       </div>
-      <div>
-        <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
-          <span style={{ fontFamily:'var(--mono)', fontSize:'0.6rem', color:'var(--muted)' }}>MEM</span>
-          <span style={{ fontFamily:'var(--mono)', fontSize:'0.6rem',
-            color: memStatus === 'ok' ? 'var(--ok)' : memStatus === 'warn' ? 'var(--warn)' : 'var(--error)' }}>
-            {memory_used_pct?.toFixed(1)}%
-          </span>
+
+      <div style={{ display:'flex', alignItems:'center', gap:4 }}>
+        <span style={{ fontFamily:'var(--mono)', fontSize:'0.55rem', color:'var(--muted)', minWidth:22 }}>MEM</span>
+        <div style={{ flex:1, height:4, background:'var(--surface3)', borderRadius:999, overflow:'hidden', minWidth:28 }}>
+          <div style={{ height:'100%', width:`${Math.min(100,memory_used_pct||0)}%`, background:memColor, borderRadius:999 }} />
         </div>
-        <ProgressBar pct={memory_used_pct} status={memStatus} height={4} showLabel={false} />
+        <span style={{ fontFamily:'var(--mono)', fontSize:'0.6rem', color:memColor, minWidth:34, textAlign:'right' }}>
+          {(memory_used_pct||0).toFixed(1)}%
+        </span>
       </div>
+
       <div style={{ textAlign:'right' }}>
         <Badge status={status} size="sm" />
       </div>
@@ -157,19 +163,15 @@ export default function KubernetesPanel({ checks }) {
           defaultOpen={true}
           badge={podWarn > 0 ? <Chip n={podWarn} color="245,158,11" label="warn" /> : null}
         >
-          {/* header */}
-          <div style={{
-            display:'grid', gridTemplateColumns:'2fr 1fr 1fr 80px',
-            gap:12, padding:'7px 22px 7px 16px',
-            borderBottom:'1px solid var(--border)',
-          }}>
-            {['Pod','CPU','Memory','Status'].map(h => (
-              <span key={h} style={{ fontFamily:'var(--mono)', fontSize:'0.6rem',
-                color:'var(--muted)', textTransform:'uppercase', letterSpacing:'0.5px',
-                textAlign: h === 'Status' ? 'right' : 'left' }}>{h}</span>
-            ))}
-          </div>
-          {podRes.map((p, i) => <PodResourceRow key={i} pod={p} />)}
+          {[...podRes]
+            .sort((a, b) => {
+              const sa = STATUS_SORT[a.status] ?? 2;
+              const sb = STATUS_SORT[b.status] ?? 2;
+              if (sa !== sb) return sa - sb;
+              return (b.cpu_used_pct + b.memory_used_pct) - (a.cpu_used_pct + a.memory_used_pct);
+            })
+            .map((p, i) => <PodResourceRow key={i} pod={p} />)
+          }
         </SubSection>
       )}
     </>

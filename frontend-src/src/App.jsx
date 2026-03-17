@@ -25,11 +25,8 @@ export default function App() {
     else                 { overallIcon = '🟢'; overallTitle = 'All systems operational';                           overallSub = `${okC+warnC+errC} services healthy — no issues detected`; }
   }
 
-  // Section order — new sections added
-  const sectionOrder = ['clickhouse','kafka','postgres','minio','kubernetes','pods_pvcs'];
-
   return (
-    <div style={{ position:'relative', zIndex:1, maxWidth:920, margin:'0 auto', padding:'32px 20px 60px' }}>
+    <div style={{ position:'relative', zIndex:1, maxWidth:1400, margin:'0 auto', padding:'32px 20px 60px' }}>
 
       {/* ── Header ── */}
       <div style={{ display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:36, flexWrap:'wrap', gap:16 }}>
@@ -111,20 +108,36 @@ export default function App() {
               <p style={{ fontSize:'0.82rem' }}>No diagnostic data yet.<br />Run a check to see results.</p>
             </div>
           )
-          : sectionOrder.map(key => {
-              const checks = results[key];
-              if (!checks) return null;
-              const meta = SECTIONS_META[key] || { label:key, sub:'', icon:'🔧', cls:'' };
-              return (
-                <ServiceSection
-                  key={key}
-                  svcKey={key}
-                  meta={meta}
-                  checks={checks}
-                  fetchTopic={fetchTopic}
-                />
-              );
-            })
+          : (
+            <div style={{ display:'grid', gridTemplateColumns:'58fr 42fr', gap:16, alignItems:'start' }}>
+              {/* ── Left column: ClickHouse · Kafka · Postgres + MinIO ── */}
+              <div>
+                {['clickhouse','kafka'].map(key => {
+                  const checks = results[key];
+                  if (!checks) return null;
+                  const meta = SECTIONS_META[key] || { label:key, sub:'', icon:'🔧', cls:'' };
+                  return <ServiceSection key={key} svcKey={key} meta={meta} checks={checks} fetchTopic={fetchTopic} />;
+                })}
+                <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 }}>
+                  {['postgres','minio'].map(key => {
+                    const checks = results[key];
+                    if (!checks) return null;
+                    const meta = SECTIONS_META[key] || { label:key, sub:'', icon:'🔧', cls:'' };
+                    return <ServiceSection key={key} svcKey={key} meta={meta} checks={checks} fetchTopic={fetchTopic} />;
+                  })}
+                </div>
+              </div>
+              {/* ── Right column: Kubernetes · Pods & PVCs ── */}
+              <div>
+                {['kubernetes','pods_pvcs'].map(key => {
+                  const checks = results[key];
+                  if (!checks) return null;
+                  const meta = SECTIONS_META[key] || { label:key, sub:'', icon:'🔧', cls:'' };
+                  return <ServiceSection key={key} svcKey={key} meta={meta} checks={checks} fetchTopic={fetchTopic} />;
+                })}
+              </div>
+            </div>
+          )
       }
 
       {/* ── Footer ── */}

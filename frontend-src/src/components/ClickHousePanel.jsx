@@ -27,7 +27,7 @@ function ChCheckRow({ icon, label, status, detail, children, tip }) {
   const [open, setOpen] = useState(false);
   const hasDetail = !!children;
   return (
-    <div style={{ borderBottom:'1px solid rgba(30,45,69,0.4)' }}>
+    <div style={{ borderBottom:'1px solid rgba(30,45,69,0.4)', gridColumn: open ? 'span 2' : 'auto' }}>
       <div
         style={{
           display:'flex', alignItems:'center', justifyContent:'space-between',
@@ -441,6 +441,9 @@ export default function ClickHousePanel({ checks }) {
         }
       >
 
+        {/* ── 2-column check grid ── */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr' }}>
+
         {/* Kafka Engine Consumer Lag */}
         <ChKafkaEngineLag chKafkaLag={chKafkaLag} />
 
@@ -626,6 +629,7 @@ export default function ClickHousePanel({ checks }) {
         {/* #24 ClickHouse errors */}
         <ChErrors data={chErrors} />
 
+        </div>{/* end 2-col check grid */}
       </SubSection>
     </>
   );
