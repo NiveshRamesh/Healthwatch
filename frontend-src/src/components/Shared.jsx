@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { statusColor, statusRgb, STATUS_LABELS } from '../utils';
 
 /* ── Status Badge ─────────────────────────────────────────────────── */
@@ -107,19 +107,30 @@ export function Chip({ n, color, label }) {
 
 /* ── Tooltip ──────────────────────────────────────────────────────── */
 export function Tip({ text }) {
-  const [vis, setVis] = useState(false);
+  const [pos, setPos] = useState(null);
+  const ref = useRef(null);
   if (!text) return null;
+
+  function handleEnter() {
+    if (ref.current) {
+      const r = ref.current.getBoundingClientRect();
+      setPos({ x: r.left + r.width / 2, y: r.top - 8 });
+    }
+  }
+
   return (
-    <span style={{ position:'relative', display:'inline-flex' }}
-      onMouseEnter={() => setVis(true)} onMouseLeave={() => setVis(false)}>
+    <span ref={ref} style={{ display:'inline-flex' }}
+      onMouseEnter={handleEnter} onMouseLeave={() => setPos(null)}>
       <span style={{ fontSize:'0.7rem', color:'var(--muted)', cursor:'help', padding:'0 4px' }}>ⓘ</span>
-      {vis && (
+      {pos && (
         <span style={{
-          position:'absolute', bottom:'calc(100% + 6px)', left:'50%',
-          transform:'translateX(-50%)',
+          position:'fixed',
+          left: pos.x,
+          top: pos.y,
+          transform:'translate(-50%, -100%)',
           background:'#0d1526', border:'1px solid var(--border)', borderRadius:7,
           padding:'8px 12px', fontSize:'0.7rem', color:'var(--muted)',
-          whiteSpace:'normal', zIndex:9999, width:260, fontFamily:'var(--mono)',
+          whiteSpace:'normal', zIndex:99999, width:260, fontFamily:'var(--mono)',
           boxShadow:'0 4px 20px rgba(0,0,0,0.6)', lineHeight:1.7,
           pointerEvents:'none',
         }}>{text}</span>
