@@ -1362,14 +1362,17 @@ async def trigger_checks(background_tasks: BackgroundTasks):
 
 def _fmt_retention(ms: int) -> str:
     """Convert retention milliseconds to a human-readable string."""
+    def _trim(f: float) -> str:
+        return str(int(f)) if f == int(f) else f"{f:.1f}"
+
     secs = ms // 1000
     if secs < 3600:
         return f"{secs // 60} min"
     hours = secs / 3600
     if hours < 48:
-        return f"{hours:.1f} hrs ({ms:,} ms)"
+        return f"{_trim(hours)} hrs ({ms:,} ms)"
     days = hours / 24
-    return f"{days:.1f} days ({ms:,} ms)"
+    return f"{_trim(days)} days ({ms:,} ms)"
 
 
 def _sync_topic_detail(topic_name: str) -> dict:
