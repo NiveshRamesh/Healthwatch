@@ -71,8 +71,8 @@ config:
 
 # ── Secrets (injected at deploy time, NEVER commit real values to Git) ────────
 secrets:
-  clickhousePassword: ""
-  postgresPassword: ""
+  clickhousePassword: "Vunet#1234"
+  postgresPassword: "beta"
 
 podLabels: {}
 podAnnotations: {}
