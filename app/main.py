@@ -806,24 +806,43 @@ async def check_clickhouse_tables() -> dict:
             inconsistent = []
 
         # Q20 — CH Kafka engine committed offsets (for lag cross-ref with Kafka)
+        # Try canonical ARRAY JOIN form first; fall back to arrayJoin scalar function.
+        kafka_engine_partitions = []
         try:
             r20 = q(
                 "Q20_kafka_engine_offsets",
-                "SELECT database, table, topic_id, partition_id, committed_offset "
+                "SELECT database, table, "
+                "       assignments.topic_id, assignments.partition_id, assignments.committed_offset "
                 "FROM system.kafka_consumers "
-                "ARRAY JOIN assignments.topic_id AS topic_id, "
-                "           assignments.partition_id AS partition_id, "
-                "           assignments.committed_offset AS committed_offset "
+                "ARRAY JOIN assignments "
                 "WHERE database NOT IN ('system','information_schema','INFORMATION_SCHEMA')",
             )
             kafka_engine_partitions = [
                 {"db": r[0], "table": r[1], "topic": r[2], "partition": r[3], "committed": r[4]}
                 for r in r20
             ]
-            logger.info(f"[ch_tables] kafka_engine_partitions: {len(kafka_engine_partitions)}")
+            logger.info(f"[ch_tables] Q20 ok: {len(kafka_engine_partitions)} partition(s)")
         except Exception as e:
-            logger.warning(f"[ch_tables] Q20_kafka_engine_offsets skipped: {e}")
-            kafka_engine_partitions = []
+            logger.warning(f"[ch_tables] Q20 ARRAY JOIN failed ({e}), trying describe fallback")
+            try:
+                # Fallback: read raw arrays and zip in Python
+                r20b = q(
+                    "Q20_kafka_engine_offsets_fallback",
+                    "SELECT database, table, "
+                    "       assignments.topic_id, assignments.partition_id, assignments.committed_offset "
+                    "FROM system.kafka_consumers "
+                    "WHERE database NOT IN ('system','information_schema','INFORMATION_SCHEMA')",
+                )
+                for row in r20b:
+                    db, tbl, topics, partitions, committeds = row
+                    for topic, partition, committed in zip(topics, partitions, committeds):
+                        kafka_engine_partitions.append(
+                            {"db": db, "table": tbl, "topic": topic,
+                             "partition": partition, "committed": committed}
+                        )
+                logger.info(f"[ch_tables] Q20 fallback ok: {len(kafka_engine_partitions)} partition(s)")
+            except Exception as e2:
+                logger.warning(f"[ch_tables] Q20 fallback also failed: {e2}")
 
         _timed("ch_tables", t0)
         return {
