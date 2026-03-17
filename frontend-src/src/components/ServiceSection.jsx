@@ -18,7 +18,7 @@ const STATUS_RGB = {
   error:'239,68,68',
 };
 
-export default function ServiceSection({ svcKey, meta, checks, fetchTopic }) {
+export default function ServiceSection({ svcKey, meta, checks, fetchTopic, bodyProps = {} }) {
   const [open,          setOpen]          = useState(true);
   const [diagModalOpen, setDiagModalOpen] = useState(false);
 
@@ -39,7 +39,7 @@ export default function ServiceSection({ svcKey, meta, checks, fetchTopic }) {
         return <KubernetesPanel checks={checks} />;
 
       case 'pods_pvcs':
-        return <PodsPVCsPanel data={checks.__pods_pvcs__} />;
+        return <PodsPVCsPanel data={checks.__pods_pvcs__} {...bodyProps} />;
 
       // postgres, minio — plain check rows
       default:

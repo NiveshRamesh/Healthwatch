@@ -125,7 +125,7 @@ function PVCRow({ pvc }) {
 }
 
 /* ── Main Pods & PVCs Panel ───────────────────────────────────────── */
-export default function PodsPVCsPanel({ data }) {
+export default function PodsPVCsPanel({ data, showOnly }) {
   if (!data) return null;
   const { pods = [], pvcs = [] } = data;
 
@@ -137,7 +137,7 @@ export default function PodsPVCsPanel({ data }) {
 
   return (
     <>
-      <SubSection
+      {(!showOnly || showOnly === 'pods') && <SubSection
         icon="🫙" title="Pod Container Health"
         defaultOpen={true}
         badge={
@@ -151,9 +151,9 @@ export default function PodsPVCsPanel({ data }) {
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', padding:'4px 2px' }}>
           {pods.map((p, i) => <PodRow key={i} pod={p} />)}
         </div>
-      </SubSection>
+      </SubSection>}
 
-      <SubSection
+      {(!showOnly || showOnly === 'pvcs') && <SubSection
         icon="💿" title="Persistent Volume Claims"
         defaultOpen={true}
         badge={
@@ -168,7 +168,7 @@ export default function PodsPVCsPanel({ data }) {
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', padding:'4px 2px' }}>
           {pvcs.map((p, i) => <PVCRow key={i} pvc={p} />)}
         </div>
-      </SubSection>
+      </SubSection>}
     </>
   );
 }

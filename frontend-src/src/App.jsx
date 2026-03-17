@@ -110,7 +110,7 @@ export default function App() {
           )
           : (
             <div style={{ display:'grid', gridTemplateColumns:'58fr 42fr', gap:16, alignItems:'start' }}>
-              {/* ── Left column: ClickHouse · Kafka · Postgres + MinIO ── */}
+              {/* ── Left column: ClickHouse · Kafka · Postgres + MinIO · PVCs ── */}
               <div>
                 {['clickhouse','kafka'].map(key => {
                   const checks = results[key];
@@ -126,15 +126,33 @@ export default function App() {
                     return <ServiceSection key={key} svcKey={key} meta={meta} checks={checks} fetchTopic={fetchTopic} />;
                   })}
                 </div>
+                {results['pods_pvcs'] && (
+                  <ServiceSection
+                    key="pvcs_left" svcKey="pods_pvcs"
+                    meta={{ label:'Persistent Volumes', sub:'Volume Claims · Storage', icon:'💿', cls:'pods_pvcs' }}
+                    checks={results['pods_pvcs']}
+                    bodyProps={{ showOnly: 'pvcs' }}
+                  />
+                )}
               </div>
-              {/* ── Right column: Kubernetes · Pods & PVCs ── */}
+              {/* ── Right column: Kubernetes · Pod Container Health ── */}
               <div>
-                {['kubernetes','pods_pvcs'].map(key => {
-                  const checks = results[key];
-                  if (!checks) return null;
-                  const meta = SECTIONS_META[key] || { label:key, sub:'', icon:'🔧', cls:'' };
-                  return <ServiceSection key={key} svcKey={key} meta={meta} checks={checks} fetchTopic={fetchTopic} />;
-                })}
+                {results['kubernetes'] && (
+                  <ServiceSection
+                    key="kubernetes" svcKey="kubernetes"
+                    meta={SECTIONS_META['kubernetes']}
+                    checks={results['kubernetes']}
+                    fetchTopic={fetchTopic}
+                  />
+                )}
+                {results['pods_pvcs'] && (
+                  <ServiceSection
+                    key="pods_pvcs" svcKey="pods_pvcs"
+                    meta={SECTIONS_META['pods_pvcs']}
+                    checks={results['pods_pvcs']}
+                    bodyProps={{ showOnly: 'pods' }}
+                  />
+                )}
               </div>
             </div>
           )
