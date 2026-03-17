@@ -1024,7 +1024,7 @@ async def check_kafka() -> dict:
     try:
         core, _, _ = _get_k8s()
         bp = core.list_namespaced_pod(
-            namespace=K8S_NAMESPACE, label_selector="app=broker"
+            namespace=K8S_NAMESPACE, label_selector="app=cp-kafka"
         ).items
         br = [p for p in bp if p.status.phase == "Running"]
         bs = "ok" if br else "error"
@@ -1360,43 +1360,77 @@ async def trigger_checks(background_tasks: BackgroundTasks):
     return {"message": "Health checks triggered"}
 
 
+def _sync_topic_detail(topic_name: str) -> dict:
+    """Fetch per-partition offsets + liveness directly from Kafka broker."""
+    from kafka import KafkaConsumer, TopicPartition
+
+    cfg = dict(
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        request_timeout_ms=10_000,
+        client_id="healthwatch-inspect",
+    )
+    consumer = KafkaConsumer(**cfg)
+    try:
+        partitions = consumer.partitions_for_topic(topic_name)
+        if not partitions:
+            return {"found": False, "topic": topic_name}
+
+        tps = [TopicPartition(topic_name, p) for p in sorted(partitions)]
+        end_offsets   = consumer.end_offsets(tps)
+        begin_offsets = consumer.beginning_offsets(tps)
+        threshold_ms  = int((time.time() - KAFKA_LIVE_WINDOW_MINUTES * 60) * 1000)
+        at_threshold  = consumer.offsets_for_times({tp: threshold_ms for tp in tps})
+
+        parts = []
+        total = 0
+        for tp in tps:
+            earliest = begin_offsets.get(tp) or 0
+            latest   = end_offsets.get(tp)   or 0
+            msgs     = max(0, latest - earliest)
+            is_live  = at_threshold.get(tp) is not None
+            parts.append({
+                "partition": str(tp.partition),
+                "earliest": earliest,
+                "latest":   latest,
+                "messages": msgs,
+                "is_live":  is_live,
+            })
+            total += msgs
+
+        # pull cached consumer lag for this topic
+        cached = (
+            last_result.get("kafka", {})
+            .get("__details__", {})
+            .get("consumer_lag", {})
+            .get(topic_name, {})
+        )
+
+        return {
+            "found": True,
+            "topic": topic_name,
+            "total_messages": total,
+            "info": {"partition_count": len(partitions), "replication_factor": "—"},
+            "lag":  cached,
+            "partition_offsets": parts,
+        }
+    finally:
+        consumer.close()
+
+
 @app.get("/api/topic/{topic_name}")
 async def topic_detail(topic_name: str):
     logger.info(f"[topic_detail] topic={topic_name}")
     try:
-        ch = _get_ch()
-        rows = ch.query(
-            "SELECT partition,min(offset),max(offset),count() FROM system.kafka_consumers "
-            f"WHERE topic='{topic_name}' GROUP BY partition ORDER BY partition"
-        ).result_rows
-        parts = [
-            {
-                "partition": str(r[0]),
-                "earliest": r[1],
-                "latest": r[2],
-                "messages": r[2] - r[1],
-                "is_live": True,
-            }
-            for r in rows
-        ]
-        total = sum(p["messages"] for p in parts)
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, _sync_topic_detail, topic_name)
         logger.info(
-            f"[topic_detail] {topic_name}: {len(parts)} partitions total={total}"
+            f"[topic_detail] {topic_name}: found={result.get('found')} "
+            f"msgs={result.get('total_messages', 0)}"
         )
-        return {
-            "topic": topic_name,
-            "found": True,
-            "total_messages": total,
-            "partition_offsets": parts,
-        }
+        return result
     except Exception as e:
         logger.error(f"[topic_detail] EXCEPTION: {e}\n{traceback.format_exc()}")
-        return {
-            "topic": topic_name,
-            "found": False,
-            "error": str(e),
-            "partition_offsets": [],
-        }
+        return {"topic": topic_name, "found": False, "error": str(e), "partition_offsets": []}
 
 
 @app.get("/api/health")
