@@ -727,12 +727,22 @@ async def check_clickhouse_tables() -> dict:
                 f"[ch_tables] long mutations: {[m['mutation_id'] for m in mutations]}"
             )
 
-        r15 = q(
-            "Q15_no_ttl",
-            "SELECT database,name FROM system.tables "
-            "WHERE engine LIKE '%MergeTree%' AND toUInt32(ttl_field)=0 "
-            "AND database NOT IN ('system','information_schema','INFORMATION_SCHEMA')",
-        )
+        # ttl_field column removed in CH 25.x; use create_table_query instead
+        try:
+            r15 = q(
+                "Q15_no_ttl",
+                "SELECT database,name FROM system.tables "
+                "WHERE engine LIKE '%MergeTree%' "
+                "AND create_table_query NOT LIKE '%TTL%' "
+                "AND database NOT IN ('system','information_schema','INFORMATION_SCHEMA')",
+            )
+        except Exception:
+            r15 = q(
+                "Q15_no_ttl_fallback",
+                "SELECT database,name FROM system.tables "
+                "WHERE engine LIKE '%MergeTree%' AND toUInt32(ttl_field)=0 "
+                "AND database NOT IN ('system','information_schema','INFORMATION_SCHEMA')",
+            )
         no_ttl = [{"database": r[0], "table": r[1]} for r in r15]
         if no_ttl:
             _names = [t["database"] + "." + t["table"] for t in no_ttl]
@@ -773,16 +783,20 @@ async def check_clickhouse_tables() -> dict:
         if stuck_repl:
             logger.warning(f"[ch_tables] stuck replication: {stuck_repl}")
 
-        r19 = q(
-            "Q19_replica_inconsistency",
-            f"SELECT database,table,count() FROM clusterAllReplicas('{CH_CLUSTER_NAME}',system.tables) "
-            f"WHERE engine LIKE '%ReplicatedMergeTree%' GROUP BY database,table HAVING count()<2",
-        )
-        inconsistent = [
-            {"database": r[0], "table": r[1], "replicas": r[2]} for r in r19
-        ]
-        if inconsistent:
-            logger.warning(f"[ch_tables] inconsistent replicas: {inconsistent}")
+        try:
+            r19 = q(
+                "Q19_replica_inconsistency",
+                f"SELECT database,table,count() FROM clusterAllReplicas('{CH_CLUSTER_NAME}',system.tables) "
+                f"WHERE engine LIKE '%ReplicatedMergeTree%' GROUP BY database,table HAVING count()<2",
+            )
+            inconsistent = [
+                {"database": r[0], "table": r[1], "replicas": r[2]} for r in r19
+            ]
+            if inconsistent:
+                logger.warning(f"[ch_tables] inconsistent replicas: {inconsistent}")
+        except Exception as e:
+            logger.warning(f"[ch_tables] Q19_replica_inconsistency skipped: {e}")
+            inconsistent = []
 
         _timed("ch_tables", t0)
         return {
