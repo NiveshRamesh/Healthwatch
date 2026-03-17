@@ -19,7 +19,8 @@ const STATUS_RGB = {
 };
 
 export default function ServiceSection({ svcKey, meta, checks, fetchTopic }) {
-  const [open, setOpen] = useState(true);
+  const [open,          setOpen]          = useState(true);
+  const [diagModalOpen, setDiagModalOpen] = useState(false);
 
   const overall = sectionOverallStatus(checks);
   const rgb     = STATUS_RGB[overall] || STATUS_RGB.error;
@@ -31,7 +32,8 @@ export default function ServiceSection({ svcKey, meta, checks, fetchTopic }) {
         return <ClickHousePanel checks={checks} />;
 
       case 'kafka':
-        return <KafkaPanel checks={checks} fetchTopic={fetchTopic} />;
+        return <KafkaPanel checks={checks} fetchTopic={fetchTopic}
+                  diagModalOpen={diagModalOpen} onDiagClose={() => setDiagModalOpen(false)} />;
 
       case 'kubernetes':
         return <KubernetesPanel checks={checks} />;
@@ -95,6 +97,19 @@ export default function ServiceSection({ svcKey, meta, checks, fetchTopic }) {
         </div>
 
         <div style={{ display:'flex', alignItems:'center', gap:10 }}>
+
+          {svcKey === 'kafka' && (
+            <button
+              onClick={e => { e.stopPropagation(); setDiagModalOpen(true); }}
+              style={{
+                display:'inline-flex', alignItems:'center', gap:5,
+                background:'rgba(0,153,255,0.12)', color:'var(--accent2)',
+                border:'1px solid rgba(0,153,255,0.3)', borderRadius:6,
+                padding:'4px 10px', fontFamily:'var(--mono)', fontSize:'0.65rem',
+                fontWeight:700, cursor:'pointer',
+              }}
+            >🔍 TOPIC DIAGNOSIS</button>
+          )}
 
           <div style={{
             display:'flex', alignItems:'center', gap:6,

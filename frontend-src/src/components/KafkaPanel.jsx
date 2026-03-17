@@ -155,22 +155,16 @@ function ConnectorSubPanel({ connectors: data }) {
 
 /* ── Topic Diagnosis Modal ───────────────────────────────────────── */
 function TopicDiagModal({ open, onClose, tls, fetchTopic }) {
-  const [selected, setSelected] = useState('');
-  const [custom,   setCustom]   = useState('');
-  const [result,   setResult]   = useState(null);
-  const [loading,  setLoading]  = useState(false);
+  const [query,   setQuery]   = useState('');
+  const [result,  setResult]  = useState(null);
+  const [loading, setLoading] = useState(false);
 
-  const live  = Object.entries(tls || {}).filter(([,v]) =>  v.is_live).map(([k]) => k).sort();
-  const stale = Object.entries(tls || {}).filter(([,v]) =>  v.has_data && !v.is_live).map(([k]) => k).sort();
-  const empty = Object.entries(tls || {}).filter(([,v]) => !v.has_data).map(([k]) => k).sort();
-  const allKnown = [...live, ...stale, ...empty];
+  const allKnown = Object.keys(tls || {}).sort();
 
-  function handleClose() {
-    onClose(); setSelected(''); setCustom(''); setResult(null);
-  }
+  function handleClose() { onClose(); setQuery(''); setResult(null); }
 
   async function inspect() {
-    const name = (custom.trim() || selected).trim();
+    const name = query.trim();
     if (!name) return;
     setLoading(true); setResult(null);
     try {
@@ -187,58 +181,39 @@ function TopicDiagModal({ open, onClose, tls, fetchTopic }) {
 
   return (
     <Modal open={open} onClose={handleClose} title="🔍 Topic Diagnosis">
-      {/* ── Selector row ── */}
       <div style={{ display:'flex', flexDirection:'column', gap:10 }}>
-        {allKnown.length > 0 && (
-          <div>
-            <div style={{ fontSize:'0.65rem', color:'var(--muted)', fontFamily:'var(--mono)',
-              textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:5 }}>
-              Select from known topics
-            </div>
-            <select
-              value={selected}
-              onChange={e => { setSelected(e.target.value); setCustom(''); setResult(null); }}
-              style={{
-                width:'100%', padding:'8px 10px', borderRadius:7,
-                background:'var(--surface)', border:'1px solid var(--border)',
-                color:'var(--text)', fontFamily:'var(--mono)', fontSize:'0.75rem',
-                cursor:'pointer', outline:'none',
-              }}
-            >
-              <option value="">— choose a topic —</option>
-              {live.length  > 0 && <optgroup label="🟢 Live">  {live.map(t  => <option key={t} value={t}>{t}</option>)}</optgroup>}
-              {stale.length > 0 && <optgroup label="🟡 Stale"> {stale.map(t => <option key={t} value={t}>{t}</option>)}</optgroup>}
-              {empty.length > 0 && <optgroup label="⚪ Empty"> {empty.map(t => <option key={t} value={t}>{t}</option>)}</optgroup>}
-            </select>
-          </div>
-        )}
 
+        {/* ── Single combobox: dropdown + free text in one input ── */}
         <div>
           <div style={{ fontSize:'0.65rem', color:'var(--muted)', fontFamily:'var(--mono)',
             textTransform:'uppercase', letterSpacing:'0.5px', marginBottom:5 }}>
-            Or type a topic name
+            Topic name
           </div>
           <input
-            value={custom}
-            onChange={e => { setCustom(e.target.value); setSelected(''); setResult(null); }}
+            list="hw-topics-list"
+            value={query}
+            onChange={e => { setQuery(e.target.value); setResult(null); }}
             onKeyDown={e => e.key === 'Enter' && inspect()}
-            placeholder="e.g. linux-monitor-input"
+            placeholder="Select or type a topic name…"
             style={{
               width:'100%', padding:'8px 10px', borderRadius:7, boxSizing:'border-box',
               background:'var(--surface)', border:'1px solid var(--border)',
               color:'var(--text)', fontFamily:'var(--mono)', fontSize:'0.75rem', outline:'none',
             }}
           />
+          <datalist id="hw-topics-list">
+            {allKnown.map(t => <option key={t} value={t} />)}
+          </datalist>
         </div>
 
         <button
           onClick={inspect}
-          disabled={loading || !(custom.trim() || selected)}
+          disabled={loading || !query.trim()}
           style={{
             display:'inline-flex', alignItems:'center', justifyContent:'center', gap:6,
-            background: (custom.trim() || selected) ? 'var(--accent2)' : 'rgba(0,153,255,0.2)',
+            background: query.trim() ? 'var(--accent2)' : 'rgba(0,153,255,0.2)',
             color:'white', border:'none', borderRadius:7, padding:'9px 18px',
-            cursor: (custom.trim() || selected) ? 'pointer' : 'default',
+            cursor: query.trim() ? 'pointer' : 'default',
             fontFamily:'var(--mono)', fontSize:'0.75rem', fontWeight:700,
           }}
         >
@@ -247,7 +222,7 @@ function TopicDiagModal({ open, onClose, tls, fetchTopic }) {
 
         {/* ── Result ── */}
         {result && (
-          <div style={{ marginTop:4, background:'var(--surface)', border:'1px solid var(--border)',
+          <div style={{ background:'var(--surface)', border:'1px solid var(--border)',
             borderRadius:10, overflow:'hidden' }}>
             <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between',
               padding:'10px 14px', borderBottom:'1px solid var(--border)',
@@ -267,8 +242,7 @@ function TopicDiagModal({ open, onClose, tls, fetchTopic }) {
 }
 
 /* ── Main Kafka Panel ────────────────────────────────────────────── */
-export default function KafkaPanel({ checks, fetchTopic }) {
-  const [diagModalOpen,  setDiagModalOpen] = useState(false);
+export default function KafkaPanel({ checks, fetchTopic, diagModalOpen, onDiagClose }) {
   const [livePanelOpen,  setLivePanelOpen] = useState(false);
   const [lagPanelOpen,   setLagPanelOpen]  = useState(false);
   const [topicModal,     setTopicModal]    = useState({ open:false, name:'', data:null });
@@ -285,20 +259,6 @@ export default function KafkaPanel({ checks, fetchTopic }) {
 
   return (
     <>
-      {/* ── Topic Diagnosis button ── */}
-      <div style={{ padding:'10px 22px 4px', display:'flex', justifyContent:'flex-end' }}>
-        <button
-          onClick={() => setDiagModalOpen(true)}
-          style={{
-            display:'inline-flex', alignItems:'center', gap:6,
-            background:'rgba(0,153,255,0.1)', color:'var(--accent2)',
-            border:'1px solid rgba(0,153,255,0.3)', borderRadius:7,
-            padding:'6px 14px', fontFamily:'var(--mono)', fontSize:'0.7rem',
-            fontWeight:700, cursor:'pointer',
-          }}
-        >🔍 TOPIC DIAGNOSIS</button>
-      </div>
-
       {/* Standard check rows */}
       {Object.entries(checks).map(([k, v]) => {
         if (k.startsWith('__') || !v?.status || k === 'Kafka Connectors' || k === 'Zookeeper Stats') return null;
@@ -329,10 +289,10 @@ export default function KafkaPanel({ checks, fetchTopic }) {
       {/* Connector check — new panel inline */}
       <ConnectorSubPanel connectors={connectors} />
 
-      {/* Topic Diagnosis modal */}
+      {/* Topic Diagnosis modal — opened from section header button */}
       <TopicDiagModal
-        open={diagModalOpen}
-        onClose={() => setDiagModalOpen(false)}
+        open={!!diagModalOpen}
+        onClose={onDiagClose}
         tls={tls}
         fetchTopic={fetchTopic}
       />
