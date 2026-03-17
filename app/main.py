@@ -1395,6 +1395,16 @@ def _sync_topic_detail(topic_name: str) -> dict:
         tps = [TopicPartition(topic_name, p) for p in sorted(partitions)]
         end_offsets   = consumer.end_offsets(tps)
         begin_offsets = consumer.beginning_offsets(tps)
+
+        # ── Replication factor from cluster metadata (loaded by partitions_for_topic) ─
+        replication_factor: int | str = "—"
+        try:
+            part_meta = consumer._client.cluster._partitions.get(topic_name, {})
+            if part_meta:
+                first = part_meta.get(0) or next(iter(part_meta.values()))
+                replication_factor = len(first.replicas)
+        except Exception as e:
+            logger.warning(f"[topic_detail] replication_factor fetch failed: {e}")
         threshold_ms  = int((time.time() - KAFKA_LIVE_WINDOW_MINUTES * 60) * 1000)
         at_threshold  = consumer.offsets_for_times({tp: threshold_ms for tp in tps})
 
@@ -1448,7 +1458,7 @@ def _sync_topic_detail(topic_name: str) -> dict:
             "found": True,
             "topic": topic_name,
             "total_messages": total,
-            "info": {"partition_count": len(partitions), "replication_factor": "—"},
+            "info": {"partition_count": len(partitions), "replication_factor": replication_factor},
             "retention": {"retention_ms": retention_str},
             "lag":  cached,
             "partition_offsets": parts,
