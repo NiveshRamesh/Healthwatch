@@ -1419,14 +1419,20 @@ def _sync_topic_detail(topic_name: str) -> dict:
         try:
             cfg_resources = [ConfigResource(ConfigResourceType.TOPIC, topic_name)]
             configs = admin.describe_configs(cfg_resources)
-            # describe_configs returns a list of futures/results depending on version
-            for resource, config_entries in configs.items():
-                for entry in config_entries.values():
-                    if entry.name == "retention.ms":
-                        val = int(entry.value)
-                        if val > 0:
-                            retention_str = _fmt_retention(val)
-                        break
+            # kafka-python returns a list of DescribeConfigsResponse objects;
+            # each has a .resources list of tuples:
+            #   (error_code, error_message, resource_type, resource_name, config_entries)
+            # config_entries is a list of tuples: (name, value, is_sensitive, is_default, ...)
+            for response in configs:
+                for resource in response.resources:
+                    _err, _errmsg, _rtype, _rname, config_entries = resource
+                    for entry in config_entries:
+                        name, value = entry[0], entry[1]
+                        if name == "retention.ms" and value is not None:
+                            val = int(value)
+                            if val > 0:
+                                retention_str = _fmt_retention(val)
+                            break
         except Exception as e:
             logger.warning(f"[topic_detail] retention fetch failed: {e}")
 
