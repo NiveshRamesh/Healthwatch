@@ -36,7 +36,7 @@ config:
   # ClickHouse
   clickhouseHost: "clickhouse.vsmaps.svc.cluster.local"
   clickhousePort: "8123"
-  clickhouseUser: "default"
+  clickhouseUser: "vusmartmanager"
   clickhouseDb: "vusmart"
   chClusterName: "vusmart"
   chMutationAgeMinutes: "30"
@@ -60,8 +60,8 @@ config:
   # PostgreSQL
   postgresHost: "timescaledb.vsmaps.svc.cluster.local"
   postgresPort: "5432"
-  postgresUser: "postgres"
-  postgresDb: "postgres"
+  postgresUser: "core"
+  postgresDb: "multicore"
 
   # MinIO
   minioEndpoint: "http://minio-tenant.vsmaps.svc.cluster.local:9000"
