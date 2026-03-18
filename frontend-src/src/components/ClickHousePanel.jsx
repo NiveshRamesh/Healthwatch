@@ -375,159 +375,89 @@ function ReplicaExceptions({ data }) {
   );
 }
 
+/* ── ClickHouse Errors — click a row to fetch actual error messages ── */
+const _err_code_map = {
+  MEMORY_LIMIT_EXCEEDED: 241, UNKNOWN_TABLE: 60,
+  SCHEMA_MISMATCH: 517, TOO_MANY_PARTS: 252, PARSE_ERROR: 62,
+  MERGE_MEMORY_LIMIT: 0,
+};
+
 function ChErrors({ data }) {
   const rows = data?.errors || [];
+  const [expandedIdx, setExpandedIdx] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [loadingMsgs, setLoadingMsgs] = useState(false);
+
+  const handleRowClick = useCallback(async (idx, errorName) => {
+    if (expandedIdx === idx) { setExpandedIdx(null); return; }
+    setExpandedIdx(idx);
+    setMessages([]);
+    setLoadingMsgs(true);
+    try {
+      const code = _err_code_map[errorName] ?? -1;
+      const res = await fetch(`${BASE}/api/ch-error-messages?code=${code}`);
+      const json = await res.json();
+      setMessages(json.messages || []);
+    } catch (e) {
+      console.error('fetch error messages failed', e);
+      setMessages([]);
+    } finally {
+      setLoadingMsgs(false);
+    }
+  }, [expandedIdx]);
+
   return (
     <ChCheckRow icon="🔴" label="ClickHouse Errors (1hr)" status={data?.status || 'ok'} detail={data?.detail || ''}
-      tip="Query/insert failures from system.query_log + merge memory failures from system.text_log."
+      tip="Query/insert failures from system.query_log + merge memory failures from system.text_log. Click a row to see actual error messages."
     >
       {rows.length > 0 && (
-        <DataTable cols={['Error Type', 'Count', 'Severity']}>
-          {rows.map((r, i) => (
-            <tr key={i}>
-              <td style={{ fontWeight: 600 }}>{r.error}</td>
-              <td style={{ color: r.status === 'critical' ? 'var(--error)' : 'var(--warn)', fontWeight: 700 }}>{fmt(r.count)}</td>
-              <td>
-                <span style={{
-                  padding: '2px 8px', borderRadius: 4, fontSize: '0.62rem', fontWeight: 700,
-                  background: r.status === 'critical' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
-                  color: r.status === 'critical' ? 'var(--error)' : 'var(--warn)',
-                }}>{r.status.toUpperCase()}</span>
-              </td>
-            </tr>
-          ))}
-        </DataTable>
+        <div>
+          <DataTable cols={['Error Type', 'Count', 'Severity', '']}>
+            {rows.map((r, i) => (
+              <tr key={i} onClick={() => handleRowClick(i, r.error)}
+                style={{ cursor: 'pointer' }}>
+                <td style={{ fontWeight: 600 }}>{r.error}</td>
+                <td style={{ color: r.status === 'critical' ? 'var(--error)' : 'var(--warn)', fontWeight: 700 }}>{fmt(r.count)}</td>
+                <td>
+                  <span style={{
+                    padding: '2px 8px', borderRadius: 4, fontSize: '0.62rem', fontWeight: 700,
+                    background: r.status === 'critical' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
+                    color: r.status === 'critical' ? 'var(--error)' : 'var(--warn)',
+                  }}>{r.status.toUpperCase()}</span>
+                </td>
+                <td style={{ color: 'var(--muted)', fontSize: '0.6rem' }}>
+                  {expandedIdx === i ? '▲' : '▼'}
+                </td>
+              </tr>
+            ))}
+          </DataTable>
+          {expandedIdx != null && (
+            <div style={{
+              marginTop: 8, padding: '10px 12px', borderRadius: 8,
+              background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)',
+            }}>
+              <div style={{ fontSize: '0.65rem', color: 'var(--accent)', fontWeight: 600, marginBottom: 6 }}>
+                Error Messages — {rows[expandedIdx]?.error}
+              </div>
+              {loadingMsgs && (
+                <div style={{ fontSize: '0.62rem', color: 'var(--muted)', fontFamily: 'var(--mono)' }}>Loading...</div>
+              )}
+              {!loadingMsgs && messages.length === 0 && (
+                <div style={{ fontSize: '0.62rem', color: 'var(--muted)', fontFamily: 'var(--mono)' }}>No recent error messages found</div>
+              )}
+              {!loadingMsgs && messages.map((msg, mi) => (
+                <div key={mi} style={{
+                  fontSize: '0.62rem', fontFamily: 'var(--mono)', color: 'var(--error)',
+                  padding: '6px 8px', marginBottom: 4, borderRadius: 5,
+                  background: 'rgba(239,68,68,0.05)', wordBreak: 'break-all',
+                  borderLeft: '2px solid var(--error)',
+                }}>{msg}</div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
     </ChCheckRow>
-  );
-}
-
-/* ── Custom time range error explorer ────────────────────────────── */
-const TIME_PRESETS = [
-  { label: '1h', hours: 1 },
-  { label: '6h', hours: 6 },
-  { label: '12h', hours: 12 },
-  { label: '1d', hours: 24 },
-  { label: '3d', hours: 72 },
-  { label: '7d', hours: 168 },
-];
-
-function ChErrorExplorer() {
-  const [hours, setHours] = useState(null);
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [expandedRow, setExpandedRow] = useState(null);
-
-  const fetchErrors = useCallback(async (h) => {
-    setHours(h);
-    setLoading(true);
-    setExpandedRow(null);
-    try {
-      const res = await fetch(`${BASE}/api/ch-errors?hours=${h}`);
-      const json = await res.json();
-      setData(json);
-    } catch (e) {
-      console.error('ch-errors fetch failed', e);
-      setData({ errors: [], status: 'error', detail: 'Fetch failed' });
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const rgb = !data ? '100,100,100'
-    : data.status === 'ok' ? '16,185,129'
-    : data.status === 'warn' ? '245,158,11' : '239,68,68';
-
-  return (
-    <div style={{
-      margin: 4, borderRadius: 10, overflow: 'hidden',
-      background: `linear-gradient(150deg, rgba(${rgb},0.08), rgba(${rgb},0.01))`,
-      border: `1px solid rgba(${rgb},0.15)`,
-      borderLeft: '3px solid var(--accent)',
-    }}>
-      <div style={{ padding: '12px 14px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-          <span style={{ fontSize: '1.15rem' }}>🔍</span>
-          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text)' }}>Error Explorer</span>
-          <Tip text="Select a time range to query ClickHouse errors on demand. Click a row to see sample queries." />
-        </div>
-        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-          {TIME_PRESETS.map(p => (
-            <button key={p.hours} onClick={() => fetchErrors(p.hours)} style={{
-              padding: '5px 14px', borderRadius: 6, fontSize: '0.7rem', fontFamily: 'var(--mono)',
-              fontWeight: hours === p.hours ? 700 : 500,
-              border: hours === p.hours ? '1px solid var(--accent)' : '1px solid var(--border)',
-              background: hours === p.hours ? 'rgba(0,212,170,0.15)' : 'var(--surface2)',
-              color: hours === p.hours ? 'var(--accent)' : 'var(--text)',
-              cursor: 'pointer', transition: 'all 0.2s',
-            }}>{p.label}</button>
-          ))}
-        </div>
-
-        {loading && (
-          <div style={{ fontSize: '0.7rem', color: 'var(--muted)', fontFamily: 'var(--mono)', padding: '8px 0' }}>
-            Loading errors...
-          </div>
-        )}
-
-        {data && !loading && (
-          <>
-            <div style={{
-              fontSize: '0.7rem', color: 'var(--muted)', fontFamily: 'var(--mono)', marginBottom: 8,
-            }}>
-              {data.detail}
-            </div>
-            {(data.errors || []).length > 0 && (
-              <div>
-                <DataTable cols={['Error Type', 'Count', 'Severity', '']}>
-                  {data.errors.map((r, i) => (
-                    <tr key={i} onClick={() => setExpandedRow(expandedRow === i ? null : i)}
-                      style={{ cursor: r.messages?.length ? 'pointer' : 'default' }}>
-                      <td style={{ fontWeight: 600 }}>{r.error}</td>
-                      <td style={{ color: r.status === 'critical' ? 'var(--error)' : 'var(--warn)', fontWeight: 700 }}>{fmt(r.count)}</td>
-                      <td>
-                        <span style={{
-                          padding: '2px 8px', borderRadius: 4, fontSize: '0.62rem', fontWeight: 700,
-                          background: r.status === 'critical' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
-                          color: r.status === 'critical' ? 'var(--error)' : 'var(--warn)',
-                        }}>{r.status.toUpperCase()}</span>
-                      </td>
-                      <td style={{ color: 'var(--muted)', fontSize: '0.6rem' }}>
-                        {r.messages?.length ? (expandedRow === i ? '▲' : '▼') : ''}
-                      </td>
-                    </tr>
-                  ))}
-                </DataTable>
-                {expandedRow != null && data.errors[expandedRow]?.messages?.length > 0 && (
-                  <div style={{
-                    marginTop: 8, padding: '10px 12px', borderRadius: 8,
-                    background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)',
-                  }}>
-                    <div style={{ fontSize: '0.65rem', color: 'var(--accent)', fontWeight: 600, marginBottom: 6 }}>
-                      Error Messages — {data.errors[expandedRow].error}
-                    </div>
-                    {data.errors[expandedRow].messages.map((msg, mi) => (
-                      <div key={mi} style={{
-                        fontSize: '0.62rem', fontFamily: 'var(--mono)', color: 'var(--error)',
-                        padding: '6px 8px', marginBottom: 4, borderRadius: 5,
-                        background: 'rgba(239,68,68,0.05)', wordBreak: 'break-all',
-                        borderLeft: '2px solid var(--error)',
-                      }}>{msg}</div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-          </>
-        )}
-
-        {!data && !loading && (
-          <div style={{ fontSize: '0.68rem', color: 'var(--muted)', fontFamily: 'var(--mono)' }}>
-            Select a time range above to fetch errors
-          </div>
-        )}
-      </div>
-    </div>
   );
 }
 
@@ -719,7 +649,6 @@ export default function ClickHousePanel({ checks }) {
             )}
           </ChCheckRow>
           <div style={{ gridColumn: 'span 2' }}><ChErrors data={chErrors} /></div>
-          <div style={{ gridColumn: 'span 2' }}><ChErrorExplorer /></div>
         </>)}
       </div>
     </>

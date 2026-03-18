@@ -1656,117 +1656,40 @@ async def trigger_checks(background_tasks: BackgroundTasks):
     return {"message": "Health checks triggered"}
 
 
-@app.get("/api/ch-errors")
-async def get_ch_errors(hours: int = 1):
-    """Fetch ClickHouse errors for a custom time window (1-168 hours)."""
-    hours = max(1, min(hours, 168))
-    logger.info(f"/api/ch-errors hours={hours}")
+@app.get("/api/ch-error-messages")
+async def get_ch_error_messages(code: int):
+    """Fetch recent error messages for a specific exception code (last 1hr only)."""
+    logger.info(f"/api/ch-error-messages code={code}")
+    _settings = "SETTINGS max_memory_usage = 1000000000, max_threads = 2"
     try:
         ch = _get_ch()
-
-        def q(label, sql):
-            r = ch.query(sql)
-            return r.result_rows
-
-        _code_map = {
-            241: "MEMORY_LIMIT_EXCEEDED", 60: "UNKNOWN_TABLE",
-            517: "SCHEMA_MISMATCH", 252: "TOO_MANY_PARTS", 62: "PARSE_ERROR",
-        }
-        _settings = "SETTINGS max_memory_usage = 1000000000, max_threads = 2"
-
-        # Use event_date (partition key) for efficient pruning, then narrow with event_time
-        date_filter = (
-            f"event_date >= toDate(now() - INTERVAL {hours} HOUR) "
-            f"AND event_time >= now() - INTERVAL {hours} HOUR"
-        )
-
-        # Step 1: counts per error code — lightweight aggregation on partition-pruned data
-        r24a = q(
-            "ch_errors_custom",
-            "SELECT exception_code, count() AS cnt "
-            "FROM system.query_log "
-            f"WHERE {date_filter} "
-            "  AND type = 'ExceptionWhileProcessing' "
-            "  AND query_kind IN ('Insert', 'Select') "
-            "  AND exception_code IN (241,60,517,252,62) "
-            "GROUP BY exception_code "
-            f"ORDER BY cnt DESC {_settings}",
-        )
-        errors = []
-        for r in r24a:
-            code = int(r[0])
-            errors.append({
-                "error": _code_map.get(code, str(code)),
-                "code": code,
-                "count": r[1],
-                "status": "critical" if r[1] > 10 else "warn",
-                "messages": [],
-            })
-
-        # Step 2: fetch sample error messages from LAST 1 HOUR only (cheap, messages repeat)
-        for err in errors:
-            try:
-                r_msgs = q(
-                    f"ch_error_msgs_{err['code']}",
-                    "SELECT DISTINCT substring(exception, 1, 300) AS msg "
-                    "FROM system.query_log "
-                    "WHERE event_date >= toDate(now() - INTERVAL 1 HOUR) "
-                    "  AND event_time >= now() - INTERVAL 1 HOUR "
-                    "  AND type = 'ExceptionWhileProcessing' "
-                    f"  AND exception_code = {err['code']} "
-                    "  AND exception != '' "
-                    f"LIMIT 10 {_settings}",
-                )
-                err["messages"] = [row[0] for row in r_msgs if row[0]]
-            except Exception as e:
-                logger.warning(f"[ch-errors] failed fetching messages for code {err['code']}: {e}")
-
-        # Merge memory errors from text_log
-        r24b = q(
-            "ch_merge_mem_custom",
-            "SELECT count() AS cnt "
-            "FROM system.text_log "
-            f"WHERE event_date >= toDate(now() - INTERVAL {hours} HOUR) "
-            f"  AND event_time >= now() - INTERVAL {hours} HOUR "
-            "  AND level IN ('Error','Fatal') "
-            "  AND message LIKE '%Memory limit%merge%' "
-            f"{_settings}",
-        )
-        merge_mem = int(r24b[0][0]) if r24b else 0
-        if merge_mem > 0:
-            merge_msgs = []
-            try:
-                r_mm = q(
-                    "ch_merge_mem_msgs",
-                    "SELECT DISTINCT substring(message, 1, 300) AS msg "
-                    "FROM system.text_log "
-                    "WHERE event_date >= toDate(now() - INTERVAL 1 HOUR) "
-                    "  AND event_time >= now() - INTERVAL 1 HOUR "
-                    "  AND level IN ('Error','Fatal') "
-                    "  AND message LIKE '%Memory limit%merge%' "
-                    f"LIMIT 10 {_settings}",
-                )
-                merge_msgs = [row[0] for row in r_mm if row[0]]
-            except Exception:
-                pass
-            errors.append({
-                "error": "MERGE_MEMORY_LIMIT", "code": 0,
-                "count": merge_mem,
-                "status": "critical" if merge_mem > 5 else "warn",
-                "messages": merge_msgs,
-            })
-
-        return {
-            "hours": hours,
-            "errors": errors,
-            "status": "critical" if any(e["status"] == "critical" for e in errors)
-                      else "warn" if errors else "ok",
-            "detail": f"{len(errors)} error type(s) in last {hours}h"
-                      if errors else f"No errors in last {hours}h",
-        }
+        if code == 0:
+            # MERGE_MEMORY_LIMIT — from text_log
+            r = ch.query(
+                "SELECT DISTINCT substring(message, 1, 500) AS msg "
+                "FROM system.text_log "
+                "WHERE event_date >= toDate(now() - INTERVAL 1 HOUR) "
+                "  AND event_time >= now() - INTERVAL 1 HOUR "
+                "  AND level IN ('Error','Fatal') "
+                "  AND message LIKE '%Memory limit%merge%' "
+                f"LIMIT 10 {_settings}"
+            )
+        else:
+            r = ch.query(
+                "SELECT DISTINCT substring(exception, 1, 500) AS msg "
+                "FROM system.query_log "
+                "WHERE event_date >= toDate(now() - INTERVAL 1 HOUR) "
+                "  AND event_time >= now() - INTERVAL 1 HOUR "
+                "  AND type = 'ExceptionWhileProcessing' "
+                f"  AND exception_code = {int(code)} "
+                "  AND exception != '' "
+                f"LIMIT 10 {_settings}"
+            )
+        messages = [row[0] for row in r.result_rows if row[0]]
+        return {"code": code, "messages": messages}
     except Exception as e:
-        logger.error(f"/api/ch-errors failed: {e}")
-        return {"hours": hours, "errors": [], "status": "error", "detail": str(e)}
+        logger.error(f"/api/ch-error-messages failed: {e}")
+        return {"code": code, "messages": [], "error": str(e)}
 
 
 def _fmt_retention(ms: int) -> str:
