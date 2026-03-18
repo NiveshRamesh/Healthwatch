@@ -5,6 +5,7 @@ import ClickHousePanel from './ClickHousePanel';
 import KafkaPanel from './KafkaPanel';
 import KubernetesPanel from './KubernetesPanel';
 import PodsPVCsPanel from './PodsPVCsPanel';
+import MinIOPanel from './MinIOPanel';
 import Modal from './Modal';
 
 const LED_ANIM = {
@@ -41,7 +42,10 @@ export default function ServiceSection({ svcKey, meta, checks, fetchTopic, bodyP
       case 'pods_pvcs':
         return <PodsPVCsPanel data={checks.__pods_pvcs__} {...bodyProps} />;
 
-      // postgres, minio — plain check rows
+      case 'minio':
+        return <MinIOPanel checks={checks} />;
+
+      // postgres — plain check rows
       default:
         return (
           <>

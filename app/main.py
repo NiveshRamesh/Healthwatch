@@ -64,6 +64,9 @@ POSTGRES_DB = os.getenv("POSTGRES_DB", "postgres")
 MINIO_ENDPOINT = os.getenv(
     "MINIO_ENDPOINT", "http://minio-tenant.vsmaps.svc.cluster.local:9000"
 )
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "")
+MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 ZK_POD_NAME = os.getenv("ZK_POD_NAME", "kafka-cluster-cp-zookeeper-0")
 ZK_PORT = int(os.getenv("ZK_PORT", "2181"))
 ZK_OUTSTANDING_WARN = int(os.getenv("ZK_OUTSTANDING_WARN", "10"))
@@ -1235,15 +1238,28 @@ async def check_clickhouse_connectivity() -> dict:
     try:
         ch = _get_ch()
         n = ch.query("SELECT count() FROM system.tables").first_row[0]
+        # Per-database table counts
+        db_rows = ch.query(
+            "SELECT database, count() AS cnt FROM system.tables "
+            "GROUP BY database ORDER BY cnt DESC"
+        ).result_rows
+        db_breakdown = [{"database": r[0], "count": r[1]} for r in db_rows]
+        db_summary = ", ".join(f"{r[0]}:{r[1]}" for r in db_rows[:5])
+        if len(db_rows) > 5:
+            db_summary += f" +{len(db_rows) - 5} more"
         ch.query("SELECT 1+1")
-        logger.info(f"[ch_connectivity] OK — {n} tables")
+        logger.info(f"[ch_connectivity] OK — {n} tables across {len(db_rows)} databases")
         _timed("ch_connectivity", t0)
         return {
             "Connection": {
                 "status": "ok",
                 "detail": f"Reachable on {CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}",
             },
-            "System Tables": {"status": "ok", "detail": f"{n} tables"},
+            "Total Tables": {
+                "status": "ok",
+                "detail": f"{n} tables across {len(db_rows)} databases ({db_summary})",
+                "databases": db_breakdown,
+            },
             "Query Execution": {
                 "status": "ok",
                 "detail": "Query executed successfully",
@@ -1254,7 +1270,7 @@ async def check_clickhouse_connectivity() -> dict:
         _timed("ch_connectivity", t0)
         return {
             "Connection": {"status": "error", "detail": str(e)},
-            "System Tables": {"status": "error", "detail": "N/A"},
+            "Total Tables": {"status": "error", "detail": "N/A"},
             "Query Execution": {"status": "error", "detail": "N/A"},
         }
 
@@ -1374,29 +1390,136 @@ async def check_minio() -> dict:
     logger.info(f"[minio] START endpoint={MINIO_ENDPOINT}")
     import httpx
 
+    result = {}
+
+    # ── Health checks ──
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             lr = await c.get(f"{MINIO_ENDPOINT}/minio/health/live")
             rr = await c.get(f"{MINIO_ENDPOINT}/minio/health/ready")
         logger.info(f"[minio] live={lr.status_code} ready={rr.status_code}")
-        _timed("minio", t0)
-        return {
-            "Liveness": {
-                "status": "ok" if lr.status_code == 200 else "error",
-                "detail": f"HTTP {lr.status_code}",
-            },
-            "Readiness": {
-                "status": "ok" if rr.status_code == 200 else "error",
-                "detail": f"HTTP {rr.status_code}",
-            },
+        result["Liveness"] = {
+            "status": "ok" if lr.status_code == 200 else "error",
+            "detail": f"HTTP {lr.status_code}",
+        }
+        result["Readiness"] = {
+            "status": "ok" if rr.status_code == 200 else "error",
+            "detail": f"HTTP {rr.status_code}",
         }
     except Exception as e:
-        logger.error(f"[minio] EXCEPTION: {e}\n{traceback.format_exc()}")
-        _timed("minio", t0)
-        return {
-            "Liveness": {"status": "error", "detail": str(e)},
-            "Readiness": {"status": "error", "detail": str(e)},
-        }
+        logger.error(f"[minio] health EXCEPTION: {e}")
+        result["Liveness"] = {"status": "error", "detail": str(e)}
+        result["Readiness"] = {"status": "error", "detail": str(e)}
+
+    # ── Bucket discovery ──
+    buckets_data = []
+    try:
+        if MINIO_ACCESS_KEY and MINIO_SECRET_KEY:
+            from minio import Minio
+            from urllib.parse import urlparse
+            from datetime import datetime, timezone
+
+            parsed = urlparse(MINIO_ENDPOINT)
+            host = parsed.hostname
+            port = parsed.port
+            endpoint = f"{host}:{port}" if port else host
+
+            client = Minio(
+                endpoint,
+                access_key=MINIO_ACCESS_KEY,
+                secret_key=MINIO_SECRET_KEY,
+                secure=MINIO_SECURE,
+            )
+            now = datetime.now(timezone.utc)
+            buckets = client.list_buckets()
+            logger.info(f"[minio] found {len(buckets)} bucket(s)")
+
+            for b in buckets:
+                bucket_info = {
+                    "name": b.name,
+                    "created": b.creation_date.isoformat() if b.creation_date else None,
+                    "total_size": 0,
+                    "total_size_human": "0 B",
+                    "object_count": 0,
+                    "last_modified": None,
+                    "recently_modified": False,
+                }
+                try:
+                    total_bytes = 0
+                    obj_count = 0
+                    latest_mod = None
+                    for obj in client.list_objects(b.name, recursive=True):
+                        total_bytes += obj.size or 0
+                        obj_count += 1
+                        if obj.last_modified:
+                            mod = obj.last_modified
+                            if latest_mod is None or mod > latest_mod:
+                                latest_mod = mod
+
+                    bucket_info["total_size"] = total_bytes
+                    bucket_info["total_size_human"] = _fmt_bytes(total_bytes)
+                    bucket_info["object_count"] = obj_count
+                    if latest_mod:
+                        bucket_info["last_modified"] = latest_mod.isoformat()
+                        hours_ago = (now - latest_mod).total_seconds() / 3600
+                        bucket_info["recently_modified"] = hours_ago <= 24
+                        bucket_info["last_modified_ago"] = _fmt_ago(now, latest_mod)
+                except Exception as be:
+                    logger.warning(f"[minio] bucket {b.name} scan failed: {be}")
+                    bucket_info["error"] = str(be)
+
+                buckets_data.append(bucket_info)
+                logger.info(
+                    f"[minio] bucket={b.name} objects={bucket_info['object_count']} "
+                    f"size={bucket_info['total_size_human']} last_mod={bucket_info.get('last_modified_ago', 'N/A')}"
+                )
+
+            total_size = sum(b["total_size"] for b in buckets_data)
+            recently_mod = [b["name"] for b in buckets_data if b["recently_modified"]]
+            result["Buckets"] = {
+                "status": "ok",
+                "detail": f"{len(buckets_data)} bucket(s) · {_fmt_bytes(total_size)} total",
+            }
+            result["__minio_buckets__"] = buckets_data
+            if recently_mod:
+                result["Recent Activity"] = {
+                    "status": "warn",
+                    "detail": f"{len(recently_mod)} bucket(s) modified in last 24h: {', '.join(recently_mod)}",
+                }
+            else:
+                result["Recent Activity"] = {
+                    "status": "ok",
+                    "detail": "No bucket modifications in last 24h",
+                }
+        else:
+            logger.info("[minio] MINIO_ACCESS_KEY/SECRET_KEY not set, skipping bucket scan")
+    except Exception as e:
+        logger.error(f"[minio] bucket scan EXCEPTION: {e}\n{traceback.format_exc()}")
+        result["Buckets"] = {"status": "error", "detail": str(e)}
+
+    _timed("minio", t0)
+    return result
+
+
+def _fmt_bytes(b: int) -> str:
+    """Human-readable byte size."""
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if abs(b) < 1024:
+            return f"{b:.1f} {unit}" if b != int(b) else f"{int(b)} {unit}"
+        b /= 1024
+    return f"{b:.1f} PiB"
+
+
+def _fmt_ago(now, dt) -> str:
+    """Human-readable time ago."""
+    secs = (now - dt).total_seconds()
+    if secs < 60:
+        return f"{int(secs)}s ago"
+    if secs < 3600:
+        return f"{int(secs // 60)}m ago"
+    if secs < 86400:
+        return f"{int(secs // 3600)}h ago"
+    return f"{int(secs // 86400)}d ago"
 
 
 async def check_kubernetes_pods() -> dict:
