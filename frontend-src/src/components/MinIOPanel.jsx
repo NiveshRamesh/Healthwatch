@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Badge, Tip } from './Shared';
 import { fmt } from '../utils';
 
-/* ── Status strip — same style as ClickHouse panel ──────────────── */
+/* ── Status strip ────────────────────────────────────────────────── */
 function StatusStrip({ checks }) {
   const items = Object.entries(checks)
     .filter(([k, v]) => !k.startsWith('__') && v?.status)
@@ -30,11 +30,11 @@ function StatusStrip({ checks }) {
   );
 }
 
-/* ── Size bar ───────────────────────────────────────────────────── */
+/* ── Size bar ────────────────────────────────────────────────────── */
 function SizeBar({ bytes, maxBytes }) {
   const pct = maxBytes > 0 ? (bytes / maxBytes) * 100 : 0;
   return (
-    <div style={{ height: 5, background: 'var(--surface3)', borderRadius: 999, overflow: 'hidden', minWidth: 60 }}>
+    <div style={{ height: 6, background: 'var(--surface3)', borderRadius: 999, overflow: 'hidden', minWidth: 80 }}>
       <div style={{
         height: '100%', width: `${pct}%`, borderRadius: 999, transition: 'width 0.6s ease',
         background: 'linear-gradient(90deg, var(--accent), var(--accent2))',
@@ -43,101 +43,70 @@ function SizeBar({ bytes, maxBytes }) {
   );
 }
 
-/* ── Bucket card ────────────────────────────────────────────────── */
-function BucketCard({ bucket, maxBytes }) {
-  const [open, setOpen] = useState(false);
-  const mod = bucket.recently_modified;
-  const rgb = mod ? '245,158,11' : '16,185,129';
-
+/* ── Bucket table — all buckets visible at once ──────────────────── */
+function BucketTable({ buckets, maxBytes }) {
   return (
-    <div style={{
-      margin: 4, borderRadius: 10, overflow: 'hidden',
-      background: `linear-gradient(150deg, rgba(${rgb},0.06), rgba(${rgb},0.01))`,
-      border: `1px solid rgba(${rgb},0.12)`,
-      borderLeft: `3px solid rgba(${rgb},0.5)`,
+    <table style={{
+      width: '100%', borderCollapse: 'separate', borderSpacing: '0 4px',
+      fontSize: '0.7rem', fontFamily: 'var(--mono)',
     }}>
-      <div
-        onClick={() => setOpen(o => !o)}
-        style={{ padding: '12px 14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12 }}
-      >
-        <span style={{ fontSize: '1.1rem' }}>🪣</span>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--text)', fontFamily: 'var(--mono)' }}>
-              {bucket.name}
-            </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {mod && (
+      <thead>
+        <tr>
+          {['Bucket', 'Objects', 'Size', 'Usage', 'Last Modified', 'Status'].map(h => (
+            <th key={h} style={{
+              textAlign: 'left', padding: '8px 10px',
+              color: 'var(--accent)', fontWeight: 600, fontSize: '0.62rem',
+              textTransform: 'uppercase', letterSpacing: '0.8px',
+              borderBottom: '1px solid rgba(0,212,170,0.15)',
+            }}>{h}</th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {buckets.map((b, i) => (
+          <tr key={b.name} style={{
+            background: i % 2 === 0 ? 'rgba(255,255,255,0.02)' : 'transparent',
+          }}>
+            <td style={{ padding: '8px 10px', fontWeight: 700 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: '0.85rem' }}>🪣</span>
+                {b.name}
+              </div>
+            </td>
+            <td style={{ padding: '8px 10px', color: 'var(--muted)' }}>{fmt(b.object_count)}</td>
+            <td style={{ padding: '8px 10px', color: 'var(--accent)', fontWeight: 600 }}>{b.total_size_human}</td>
+            <td style={{ padding: '8px 10px', minWidth: 100 }}>
+              <SizeBar bytes={b.total_size} maxBytes={maxBytes} />
+            </td>
+            <td style={{
+              padding: '8px 10px',
+              color: b.recently_modified ? 'var(--warn)' : 'var(--muted)',
+              fontWeight: b.recently_modified ? 700 : 400,
+            }}>
+              {b.last_modified_ago || 'N/A'}
+            </td>
+            <td style={{ padding: '8px 10px' }}>
+              {b.recently_modified ? (
                 <span style={{
                   padding: '2px 8px', borderRadius: 4, fontSize: '0.6rem', fontWeight: 700,
                   background: 'rgba(245,158,11,0.15)', color: 'var(--warn)',
                   border: '1px solid rgba(245,158,11,0.3)',
                 }}>MODIFIED</span>
+              ) : (
+                <span style={{
+                  padding: '2px 8px', borderRadius: 4, fontSize: '0.6rem', fontWeight: 600,
+                  background: 'rgba(16,185,129,0.1)', color: 'var(--ok)',
+                }}>OK</span>
               )}
-              <span style={{
-                fontSize: '0.72rem', fontWeight: 600, color: 'var(--accent)',
-                fontFamily: 'var(--mono)',
-              }}>{bucket.total_size_human}</span>
-              <span style={{
-                color: 'var(--muted)', fontSize: '0.6rem', transition: 'transform 0.25s',
-                transform: open ? 'rotate(180deg)' : 'none',
-              }}>▼</span>
-            </div>
-          </div>
-          {/* Size bar */}
-          <div style={{ marginTop: 6 }}>
-            <SizeBar bytes={bucket.total_size} maxBytes={maxBytes} />
-          </div>
-        </div>
-      </div>
-
-      {open && (
-        <div style={{
-          borderTop: `1px solid rgba(${rgb},0.1)`, padding: '12px 16px',
-          background: 'rgba(0,0,0,0.2)', animation: 'fadeIn 0.2s ease',
-        }}>
-          <div style={{
-            display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px',
-            fontSize: '0.68rem', fontFamily: 'var(--mono)',
-          }}>
-            <div>
-              <span style={{ color: 'var(--muted)' }}>Objects</span>
-              <div style={{ color: 'var(--text)', fontWeight: 600, marginTop: 2 }}>{fmt(bucket.object_count)}</div>
-            </div>
-            <div>
-              <span style={{ color: 'var(--muted)' }}>Disk Usage</span>
-              <div style={{ color: 'var(--accent)', fontWeight: 600, marginTop: 2 }}>{bucket.total_size_human}</div>
-            </div>
-            <div>
-              <span style={{ color: 'var(--muted)' }}>Last Modified</span>
-              <div style={{
-                color: mod ? 'var(--warn)' : 'var(--text)',
-                fontWeight: mod ? 700 : 400, marginTop: 2,
-              }}>
-                {bucket.last_modified_ago || 'N/A'}
-              </div>
-            </div>
-            <div>
-              <span style={{ color: 'var(--muted)' }}>Created</span>
-              <div style={{ color: 'var(--text)', marginTop: 2 }}>
-                {bucket.created ? new Date(bucket.created).toLocaleDateString() : 'N/A'}
-              </div>
-            </div>
-          </div>
-          {bucket.error && (
-            <div style={{
-              marginTop: 8, padding: '6px 8px', borderRadius: 5,
-              background: 'rgba(239,68,68,0.08)', color: 'var(--error)',
-              fontSize: '0.62rem', fontFamily: 'var(--mono)', wordBreak: 'break-all',
-            }}>{bucket.error}</div>
-          )}
-        </div>
-      )}
-    </div>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
-/* ── Main MinIO Panel ───────────────────────────────────────────── */
+/* ── Main MinIO Panel ────────────────────────────────────────────── */
 export default function MinIOPanel({ checks }) {
   const buckets = checks.__minio_buckets__ || [];
   const maxBytes = Math.max(...buckets.map(b => b.total_size || 0), 1);
@@ -154,18 +123,16 @@ export default function MinIOPanel({ checks }) {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text)' }}>
-                📦 Buckets
+                📦 Bucket Details
               </span>
-              <Tip text="All MinIO buckets with disk usage, object count, and last modification time. Buckets modified in the last 24h are flagged." />
+              <Tip text="All MinIO buckets with disk usage, object count, and last modification time. Buckets modified in the last 24h are flagged as MODIFIED." />
             </div>
             <span style={{
               fontSize: '0.68rem', fontFamily: 'var(--mono)', color: 'var(--muted)',
             }}>{buckets.length} bucket(s)</span>
           </div>
-          <div style={{ padding: '0 12px 16px' }}>
-            {buckets.map(b => (
-              <BucketCard key={b.name} bucket={b} maxBytes={maxBytes} />
-            ))}
+          <div style={{ padding: '4px 16px 16px', overflowX: 'auto' }}>
+            <BucketTable buckets={buckets} maxBytes={maxBytes} />
           </div>
         </>
       )}
