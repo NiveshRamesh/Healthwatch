@@ -204,13 +204,13 @@ function Paginator({ page, pages, total, pageSize, onPrev, onNext }) {
 
 /* ── Engine group icons & colors ──────────────────────────────────── */
 const ENGINE_META = {
-  ReplicatedMergeTree: { icon: '🔁', color: '0,212,170' },
-  MergeTree:           { icon: '🌲', color: '0,212,170' },
-  Distributed:         { icon: '🌐', color: '0,153,255' },
-  Kafka:               { icon: '⚡', color: '245,158,11' },
-  MaterializedView:    { icon: '👁️', color: '168,85,247' },
-  View:                { icon: '👁️', color: '100,116,139' },
-  Other:               { icon: '📦', color: '100,116,139' },
+  ReplicatedMergeTree: { icon: '🔁', color: '0,212,170', hint: 'Stores data with replication across shards' },
+  MergeTree:           { icon: '🌲', color: '0,212,170', hint: 'Local data storage engine' },
+  Distributed:         { icon: '🌐', color: '0,153,255', hint: 'Routing layer — proxies queries to shards, no data stored' },
+  Kafka:               { icon: '⚡', color: '245,158,11', hint: 'Streaming consumer — reads from Kafka topics, no data stored' },
+  MaterializedView:    { icon: '👁️', color: '168,85,247', hint: 'Trigger — routes data from Kafka → _data tables, no storage' },
+  View:                { icon: '👁️', color: '100,116,139', hint: 'Saved SQL query, no data stored' },
+  Other:               { icon: '📦', color: '100,116,139', hint: '' },
 };
 
 /* ── Engine group section (collapsible table list) ───────────────── */
@@ -251,6 +251,12 @@ function EngineGroup({ engine, tables }) {
       </div>
       {open && (
         <div style={{ padding: '4px 12px 10px', borderTop: `1px solid rgba(${meta.color},0.1)` }}>
+          {meta.hint && (
+            <div style={{
+              fontSize: '0.6rem', color: 'var(--muted)', fontFamily: 'var(--mono)',
+              padding: '4px 0 8px', fontStyle: 'italic',
+            }}>ℹ {meta.hint}</div>
+          )}
           <DataTable cols={['Table', 'Rows', 'Size']}>
             {slice.map((t, i) => (
               <tr key={i}>
