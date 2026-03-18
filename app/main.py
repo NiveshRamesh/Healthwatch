@@ -1672,28 +1672,47 @@ async def get_ch_errors(hours: int = 1):
             241: "MEMORY_LIMIT_EXCEEDED", 60: "UNKNOWN_TABLE",
             517: "SCHEMA_MISMATCH", 252: "TOO_MANY_PARTS", 62: "PARSE_ERROR",
         }
+        # Step 1: get counts per error code (lightweight aggregation)
         r24a = q(
             "ch_errors_custom",
-            "SELECT exception_code, count() AS cnt, "
-            "  groupArray(10)(substring(query, 1, 200)) AS sample_queries "
+            "SELECT exception_code, count() AS cnt "
             "FROM system.query_log "
             "WHERE type = 'ExceptionWhileProcessing' "
             f"  AND event_time >= now() - INTERVAL {hours} HOUR "
             "  AND query_kind IN ('Insert', 'Select') "
             "  AND exception_code IN (241,60,517,252,62) "
             "GROUP BY exception_code "
-            "ORDER BY cnt DESC",
+            "ORDER BY cnt DESC "
+            "SETTINGS max_memory_usage = 2000000000",
         )
-        errors = [
-            {
-                "error": _code_map.get(int(r[0]), str(r[0])),
-                "code": int(r[0]),
+        errors = []
+        for r in r24a:
+            code = int(r[0])
+            errors.append({
+                "error": _code_map.get(code, str(code)),
+                "code": code,
                 "count": r[1],
                 "status": "critical" if r[1] > 10 else "warn",
-                "sample_queries": list(r[2]) if r[2] else [],
-            }
-            for r in r24a
-        ]
+                "messages": [],
+            })
+
+        # Step 2: for each error code, fetch up to 10 actual exception messages
+        for err in errors:
+            try:
+                r_msgs = q(
+                    f"ch_error_msgs_{err['code']}",
+                    "SELECT DISTINCT substring(exception, 1, 300) AS msg "
+                    "FROM system.query_log "
+                    "WHERE type = 'ExceptionWhileProcessing' "
+                    f"  AND event_time >= now() - INTERVAL {hours} HOUR "
+                    f"  AND exception_code = {err['code']} "
+                    "  AND exception != '' "
+                    "LIMIT 10 "
+                    "SETTINGS max_memory_usage = 2000000000",
+                )
+                err["messages"] = [row[0] for row in r_msgs if row[0]]
+            except Exception as e:
+                logger.warning(f"[ch-errors] failed fetching messages for code {err['code']}: {e}")
 
         r24b = q(
             "ch_merge_mem_custom",
@@ -1701,15 +1720,32 @@ async def get_ch_errors(hours: int = 1):
             "FROM system.text_log "
             "WHERE level IN ('Error','Fatal') "
             "  AND message LIKE '%Memory limit%merge%' "
-            f"  AND event_time >= now() - INTERVAL {hours} HOUR",
+            f"  AND event_time >= now() - INTERVAL {hours} HOUR "
+            "SETTINGS max_memory_usage = 2000000000",
         )
         merge_mem = int(r24b[0][0]) if r24b else 0
         if merge_mem > 0:
+            # fetch sample merge error messages
+            merge_msgs = []
+            try:
+                r_mm = q(
+                    "ch_merge_mem_msgs",
+                    "SELECT DISTINCT substring(message, 1, 300) AS msg "
+                    "FROM system.text_log "
+                    "WHERE level IN ('Error','Fatal') "
+                    "  AND message LIKE '%Memory limit%merge%' "
+                    f"  AND event_time >= now() - INTERVAL {hours} HOUR "
+                    "LIMIT 10 "
+                    "SETTINGS max_memory_usage = 2000000000",
+                )
+                merge_msgs = [row[0] for row in r_mm if row[0]]
+            except Exception:
+                pass
             errors.append({
                 "error": "MERGE_MEMORY_LIMIT", "code": 0,
                 "count": merge_mem,
                 "status": "critical" if merge_mem > 5 else "warn",
-                "sample_queries": [],
+                "messages": merge_msgs,
             })
 
         return {

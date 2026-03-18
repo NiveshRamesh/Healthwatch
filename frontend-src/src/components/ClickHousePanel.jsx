@@ -482,7 +482,7 @@ function ChErrorExplorer() {
                 <DataTable cols={['Error Type', 'Count', 'Severity', '']}>
                   {data.errors.map((r, i) => (
                     <tr key={i} onClick={() => setExpandedRow(expandedRow === i ? null : i)}
-                      style={{ cursor: r.sample_queries?.length ? 'pointer' : 'default' }}>
+                      style={{ cursor: r.messages?.length ? 'pointer' : 'default' }}>
                       <td style={{ fontWeight: 600 }}>{r.error}</td>
                       <td style={{ color: r.status === 'critical' ? 'var(--error)' : 'var(--warn)', fontWeight: 700 }}>{fmt(r.count)}</td>
                       <td>
@@ -493,26 +493,26 @@ function ChErrorExplorer() {
                         }}>{r.status.toUpperCase()}</span>
                       </td>
                       <td style={{ color: 'var(--muted)', fontSize: '0.6rem' }}>
-                        {r.sample_queries?.length ? (expandedRow === i ? '▲' : '▼') : ''}
+                        {r.messages?.length ? (expandedRow === i ? '▲' : '▼') : ''}
                       </td>
                     </tr>
                   ))}
                 </DataTable>
-                {expandedRow != null && data.errors[expandedRow]?.sample_queries?.length > 0 && (
+                {expandedRow != null && data.errors[expandedRow]?.messages?.length > 0 && (
                   <div style={{
                     marginTop: 8, padding: '10px 12px', borderRadius: 8,
                     background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)',
                   }}>
                     <div style={{ fontSize: '0.65rem', color: 'var(--accent)', fontWeight: 600, marginBottom: 6 }}>
-                      Sample Queries — {data.errors[expandedRow].error}
+                      Error Messages — {data.errors[expandedRow].error}
                     </div>
-                    {data.errors[expandedRow].sample_queries.map((q, qi) => (
-                      <div key={qi} style={{
-                        fontSize: '0.62rem', fontFamily: 'var(--mono)', color: 'var(--muted)',
+                    {data.errors[expandedRow].messages.map((msg, mi) => (
+                      <div key={mi} style={{
+                        fontSize: '0.62rem', fontFamily: 'var(--mono)', color: 'var(--error)',
                         padding: '6px 8px', marginBottom: 4, borderRadius: 5,
-                        background: 'rgba(255,255,255,0.03)', wordBreak: 'break-all',
-                        borderLeft: '2px solid var(--accent)',
-                      }}>{q}</div>
+                        background: 'rgba(239,68,68,0.05)', wordBreak: 'break-all',
+                        borderLeft: '2px solid var(--error)',
+                      }}>{msg}</div>
                     ))}
                   </div>
                 )}
