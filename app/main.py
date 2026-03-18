@@ -778,6 +778,17 @@ async def check_clickhouse_tables() -> dict:
         _sz = [t["database"] + "." + t["table"] + "=" + t["size"] for t in table_sizes]
         logger.info(f"[ch_tables] top tables: {_sz}")
 
+        r17b = q(
+            "Q17b_table_sizes_vusmart",
+            "SELECT database,table,formatReadableSize(sum(bytes_on_disk)),sum(bytes_on_disk) "
+            f"FROM system.parts WHERE active=1 AND database='{CLICKHOUSE_DB}' "
+            "GROUP BY database,table ORDER BY 4 DESC LIMIT 5",
+        )
+        table_sizes_vusmart = [
+            {"database": r[0], "table": r[1], "size": r[2], "bytes": r[3]} for r in r17b
+        ]
+        logger.info(f"[ch_tables] top tables (vusmart): {len(table_sizes_vusmart)}")
+
         r18 = q(
             "Q18_stuck_repl",
             f"SELECT database,table,type,num_postponed FROM system.replication_queue "
@@ -1023,6 +1034,7 @@ async def check_clickhouse_tables() -> dict:
             },
             "table_sizes": {
                 "tables": table_sizes,
+                "tables_vusmart": table_sizes_vusmart,
                 "status": "ok",
                 "detail": "Top 5 table sizes",
             },
@@ -1642,6 +1654,75 @@ async def trigger_checks(background_tasks: BackgroundTasks):
     logger.info("/api/run triggered")
     background_tasks.add_task(run_all_checks)
     return {"message": "Health checks triggered"}
+
+
+@app.get("/api/ch-errors")
+async def get_ch_errors(hours: int = 1):
+    """Fetch ClickHouse errors for a custom time window (1-168 hours)."""
+    hours = max(1, min(hours, 168))
+    logger.info(f"/api/ch-errors hours={hours}")
+    try:
+        ch = _get_ch()
+
+        def q(label, sql):
+            r = ch.query(sql)
+            return r.result_rows
+
+        _code_map = {
+            241: "MEMORY_LIMIT_EXCEEDED", 60: "UNKNOWN_TABLE",
+            517: "SCHEMA_MISMATCH", 252: "TOO_MANY_PARTS", 62: "PARSE_ERROR",
+        }
+        r24a = q(
+            "ch_errors_custom",
+            "SELECT exception_code, count() AS cnt, "
+            "  groupArray(10)(substring(query, 1, 200)) AS sample_queries "
+            "FROM system.query_log "
+            "WHERE type = 'ExceptionWhileProcessing' "
+            f"  AND event_time >= now() - INTERVAL {hours} HOUR "
+            "  AND query_kind IN ('Insert', 'Select') "
+            "  AND exception_code IN (241,60,517,252,62) "
+            "GROUP BY exception_code "
+            "ORDER BY cnt DESC",
+        )
+        errors = [
+            {
+                "error": _code_map.get(int(r[0]), str(r[0])),
+                "code": int(r[0]),
+                "count": r[1],
+                "status": "critical" if r[1] > 10 else "warn",
+                "sample_queries": list(r[2]) if r[2] else [],
+            }
+            for r in r24a
+        ]
+
+        r24b = q(
+            "ch_merge_mem_custom",
+            "SELECT count() AS cnt "
+            "FROM system.text_log "
+            "WHERE level IN ('Error','Fatal') "
+            "  AND message LIKE '%Memory limit%merge%' "
+            f"  AND event_time >= now() - INTERVAL {hours} HOUR",
+        )
+        merge_mem = int(r24b[0][0]) if r24b else 0
+        if merge_mem > 0:
+            errors.append({
+                "error": "MERGE_MEMORY_LIMIT", "code": 0,
+                "count": merge_mem,
+                "status": "critical" if merge_mem > 5 else "warn",
+                "sample_queries": [],
+            })
+
+        return {
+            "hours": hours,
+            "errors": errors,
+            "status": "critical" if any(e["status"] == "critical" for e in errors)
+                      else "warn" if errors else "ok",
+            "detail": f"{len(errors)} error type(s) in last {hours}h"
+                      if errors else f"No errors in last {hours}h",
+        }
+    except Exception as e:
+        logger.error(f"/api/ch-errors failed: {e}")
+        return {"hours": hours, "errors": [], "status": "error", "detail": str(e)}
 
 
 def _fmt_retention(ms: int) -> str:

@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Badge, Tip, Chip } from './Shared';
 import { fmt } from '../utils';
+
+const BASE = '/healthwatch';
 
 /* ── KPI Status Strip — horizontal cards for connectivity checks ── */
 function StatusStrip({ checks }) {
@@ -30,19 +32,27 @@ function StatusStrip({ checks }) {
   );
 }
 
-/* ── Group divider — full-width with horizontal rule ─────────────── */
-function GroupDivider({ label }) {
+/* ── Group divider — collapsible full-width section header ────────── */
+function GroupDivider({ label, open, onToggle }) {
   return (
-    <div style={{
-      gridColumn: 'span 2', display: 'flex', alignItems: 'center', gap: 12,
-      padding: '16px 4px 6px', marginTop: 4,
-    }}>
+    <div
+      onClick={onToggle}
+      style={{
+        gridColumn: 'span 2', display: 'flex', alignItems: 'center', gap: 12,
+        padding: '16px 4px 6px', marginTop: 4, cursor: 'pointer',
+        userSelect: 'none',
+      }}
+    >
       <span style={{
         fontSize: '0.68rem', fontFamily: 'var(--mono)', fontWeight: 700,
         color: 'var(--accent)', textTransform: 'uppercase', letterSpacing: '1.5px',
         whiteSpace: 'nowrap',
       }}>{label}</span>
       <div style={{ flex: 1, height: 1, background: 'linear-gradient(90deg, rgba(0,212,170,0.3), transparent)' }} />
+      <span style={{
+        color: 'var(--accent)', fontSize: '0.7rem', transition: 'transform 0.25s',
+        transform: open ? 'rotate(180deg)' : 'none', flexShrink: 0,
+      }}>▼</span>
     </div>
   );
 }
@@ -392,6 +402,135 @@ function ChErrors({ data }) {
   );
 }
 
+/* ── Custom time range error explorer ────────────────────────────── */
+const TIME_PRESETS = [
+  { label: '1h', hours: 1 },
+  { label: '6h', hours: 6 },
+  { label: '12h', hours: 12 },
+  { label: '1d', hours: 24 },
+  { label: '3d', hours: 72 },
+  { label: '7d', hours: 168 },
+];
+
+function ChErrorExplorer() {
+  const [hours, setHours] = useState(null);
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [expandedRow, setExpandedRow] = useState(null);
+
+  const fetchErrors = useCallback(async (h) => {
+    setHours(h);
+    setLoading(true);
+    setExpandedRow(null);
+    try {
+      const res = await fetch(`${BASE}/api/ch-errors?hours=${h}`);
+      const json = await res.json();
+      setData(json);
+    } catch (e) {
+      console.error('ch-errors fetch failed', e);
+      setData({ errors: [], status: 'error', detail: 'Fetch failed' });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const rgb = !data ? '100,100,100'
+    : data.status === 'ok' ? '16,185,129'
+    : data.status === 'warn' ? '245,158,11' : '239,68,68';
+
+  return (
+    <div style={{
+      margin: 4, borderRadius: 10, overflow: 'hidden',
+      background: `linear-gradient(150deg, rgba(${rgb},0.08), rgba(${rgb},0.01))`,
+      border: `1px solid rgba(${rgb},0.15)`,
+      borderLeft: '3px solid var(--accent)',
+    }}>
+      <div style={{ padding: '12px 14px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <span style={{ fontSize: '1.15rem' }}>🔍</span>
+          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text)' }}>Error Explorer</span>
+          <Tip text="Select a time range to query ClickHouse errors on demand. Click a row to see sample queries." />
+        </div>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+          {TIME_PRESETS.map(p => (
+            <button key={p.hours} onClick={() => fetchErrors(p.hours)} style={{
+              padding: '5px 14px', borderRadius: 6, fontSize: '0.7rem', fontFamily: 'var(--mono)',
+              fontWeight: hours === p.hours ? 700 : 500,
+              border: hours === p.hours ? '1px solid var(--accent)' : '1px solid var(--border)',
+              background: hours === p.hours ? 'rgba(0,212,170,0.15)' : 'var(--surface2)',
+              color: hours === p.hours ? 'var(--accent)' : 'var(--text)',
+              cursor: 'pointer', transition: 'all 0.2s',
+            }}>{p.label}</button>
+          ))}
+        </div>
+
+        {loading && (
+          <div style={{ fontSize: '0.7rem', color: 'var(--muted)', fontFamily: 'var(--mono)', padding: '8px 0' }}>
+            Loading errors...
+          </div>
+        )}
+
+        {data && !loading && (
+          <>
+            <div style={{
+              fontSize: '0.7rem', color: 'var(--muted)', fontFamily: 'var(--mono)', marginBottom: 8,
+            }}>
+              {data.detail}
+            </div>
+            {(data.errors || []).length > 0 && (
+              <div>
+                <DataTable cols={['Error Type', 'Count', 'Severity', '']}>
+                  {data.errors.map((r, i) => (
+                    <tr key={i} onClick={() => setExpandedRow(expandedRow === i ? null : i)}
+                      style={{ cursor: r.sample_queries?.length ? 'pointer' : 'default' }}>
+                      <td style={{ fontWeight: 600 }}>{r.error}</td>
+                      <td style={{ color: r.status === 'critical' ? 'var(--error)' : 'var(--warn)', fontWeight: 700 }}>{fmt(r.count)}</td>
+                      <td>
+                        <span style={{
+                          padding: '2px 8px', borderRadius: 4, fontSize: '0.62rem', fontWeight: 700,
+                          background: r.status === 'critical' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
+                          color: r.status === 'critical' ? 'var(--error)' : 'var(--warn)',
+                        }}>{r.status.toUpperCase()}</span>
+                      </td>
+                      <td style={{ color: 'var(--muted)', fontSize: '0.6rem' }}>
+                        {r.sample_queries?.length ? (expandedRow === i ? '▲' : '▼') : ''}
+                      </td>
+                    </tr>
+                  ))}
+                </DataTable>
+                {expandedRow != null && data.errors[expandedRow]?.sample_queries?.length > 0 && (
+                  <div style={{
+                    marginTop: 8, padding: '10px 12px', borderRadius: 8,
+                    background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border)',
+                  }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--accent)', fontWeight: 600, marginBottom: 6 }}>
+                      Sample Queries — {data.errors[expandedRow].error}
+                    </div>
+                    {data.errors[expandedRow].sample_queries.map((q, qi) => (
+                      <div key={qi} style={{
+                        fontSize: '0.62rem', fontFamily: 'var(--mono)', color: 'var(--muted)',
+                        padding: '6px 8px', marginBottom: 4, borderRadius: 5,
+                        background: 'rgba(255,255,255,0.03)', wordBreak: 'break-all',
+                        borderLeft: '2px solid var(--accent)',
+                      }}>{q}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </>
+        )}
+
+        {!data && !loading && (
+          <div style={{ fontSize: '0.68rem', color: 'var(--muted)', fontFamily: 'var(--mono)' }}>
+            Select a time range above to fetch errors
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ── Main ClickHouse Panel ────────────────────────────────────────── */
 export default function ClickHousePanel({ checks }) {
   const chTables = checks.__ch_tables__ || {};
@@ -412,6 +551,11 @@ export default function ClickHousePanel({ checks }) {
   const chErrors      = chTables.ch_errors              || {};
 
   const maxBytes = Math.max(...(tableSizes.tables || []).map(t => t.bytes || 0), 1);
+  const maxBytesVusmart = Math.max(...(tableSizes.tables_vusmart || []).map(t => t.bytes || 0), 1);
+
+  /* collapsible section state */
+  const [sections, setSections] = useState({ kafka: true, replication: true, schema: true, storage: true });
+  const toggle = (key) => setSections(s => ({ ...s, [key]: !s[key] }));
 
   return (
     <>
@@ -437,121 +581,146 @@ export default function ClickHousePanel({ checks }) {
       {/* 2-column check card grid */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', padding: '0 12px 16px' }}>
 
-        <GroupDivider label="Kafka &amp; Pipeline" />
-        <div style={{ gridColumn: 'span 2' }}><ChKafkaEngineLag chKafkaLag={chKafkaLag} /></div>
-        <ChCheckRow icon="📭" label="Unused Kafka Tables" status={unusedKafka.status} detail={unusedKafka.detail}
-          tip="Kafka Engine tables that never consumed a single message — likely misconfigured or abandoned.">
-          {(unusedKafka.tables || []).length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-              {unusedKafka.tables.map((t, i) => (
-                <span key={i} style={{
-                  background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)',
-                  color: 'var(--warn)', borderRadius: 5, padding: '3px 8px', fontFamily: 'var(--mono)', fontSize: '0.65rem',
-                }}>{t.database}.{t.table}</span>
-              ))}
-            </div>
-          )}
-        </ChCheckRow>
-        <div style={{ gridColumn: 'span 2' }}><KafkaPipelineHealth data={kafkaPipeline} /></div>
-        <div style={{ gridColumn: 'span 2' }}><IngestionRate data={ingestionRate} /></div>
+        {/* ── Kafka & Pipeline ── */}
+        <GroupDivider label="Kafka &amp; Pipeline" open={sections.kafka} onToggle={() => toggle('kafka')} />
+        {sections.kafka && (<>
+          <div style={{ gridColumn: 'span 2' }}><ChKafkaEngineLag chKafkaLag={chKafkaLag} /></div>
+          <ChCheckRow icon="📭" label="Unused Kafka Tables" status={unusedKafka.status} detail={unusedKafka.detail}
+            tip="Kafka Engine tables that never consumed a single message — likely misconfigured or abandoned.">
+            {(unusedKafka.tables || []).length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                {unusedKafka.tables.map((t, i) => (
+                  <span key={i} style={{
+                    background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)',
+                    color: 'var(--warn)', borderRadius: 5, padding: '3px 8px', fontFamily: 'var(--mono)', fontSize: '0.65rem',
+                  }}>{t.database}.{t.table}</span>
+                ))}
+              </div>
+            )}
+          </ChCheckRow>
+          <div style={{ gridColumn: 'span 2' }}><KafkaPipelineHealth data={kafkaPipeline} /></div>
+          <div style={{ gridColumn: 'span 2' }}><IngestionRate data={ingestionRate} /></div>
+        </>)}
 
-        <GroupDivider label="Replication &amp; Consistency" />
-        <ChCheckRow icon="🔒" label="Read-Only Tables" status={readOnly.status} detail={readOnly.detail}
-          tip="ReplicatedMergeTree tables in is_readonly=1 state. Caused by lost ZK connection.">
-          {(readOnly.tables || []).length > 0 && (
-            <DataTable cols={['Database', 'Table', 'Engine']}>
-              {readOnly.tables.map((t, i) => (
-                <tr key={i}><td style={{ color: 'var(--error)' }}>{t.database}</td><td>{t.table}</td><td style={{ color: 'var(--muted)' }}>{t.engine}</td></tr>
-              ))}
-            </DataTable>
-          )}
-        </ChCheckRow>
-        <ChCheckRow icon="🔁" label="Replication Queue Stuck" status={replStuck.status} detail={replStuck.detail}
-          tip="Replication queue entries postponed >100 times. High counts mean a replica is failing to sync.">
-          {(replStuck.jobs || []).length > 0 && (
-            <DataTable cols={['Database', 'Table', 'Count']}>
-              {replStuck.jobs.map((j, i) => (
-                <tr key={i}><td style={{ color: 'var(--error)' }}>{j.database}</td><td>{j.table}</td><td style={{ fontWeight: 700 }}>{j.count}</td></tr>
-              ))}
-            </DataTable>
-          )}
-        </ChCheckRow>
-        <div style={{ gridColumn: 'span 2' }}><ReplicaInconsistencyRow replicaIncons={replicaIncons} /></div>
-        <div style={{ gridColumn: 'span 2' }}><ReplicaExceptions data={replicaExcept} /></div>
-
-        <GroupDivider label="Schema &amp; Config" />
-        <ChCheckRow icon="💤" label="Inactive DDL Queries" status={inactiveQ.status} detail={inactiveQ.detail}
-          tip="DDL queries stuck in Inactive state. Block schema changes cluster-wide.">
-          {(inactiveQ.queries || []).length > 0 && (
-            <div>
-              {inactiveQ.queries.map((q, i) => (
-                <div key={i} style={{ background: 'var(--surface)', borderRadius: 6, padding: '8px 10px', marginBottom: 5 }}>
-                  <div style={{ fontSize: '0.65rem', color: 'var(--warn)', fontFamily: 'var(--mono)' }}>{q.query}</div>
-                  <div style={{ fontSize: '0.6rem', color: 'var(--muted)', marginTop: 3, fontFamily: 'var(--mono)' }}>Created: {q.query_create_time}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </ChCheckRow>
-        <ChCheckRow icon="⚗️" label="Long-Running Mutations" status={longMut.status} detail={longMut.detail}
-          tip="ALTER TABLE mutations running >30 min. Hold resources and slow merges.">
-          {(longMut.mutations || []).length > 0 && (
-            <div>
-              {longMut.mutations.map((m, i) => (
-                <div key={i} style={{ background: 'var(--surface)', borderRadius: 6, padding: '8px 10px', marginBottom: 5 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <span style={{ fontFamily: 'var(--mono)', fontSize: '0.68rem', fontWeight: 700 }}>{m.database}.{m.table}</span>
-                    <Badge status="warn" label={`${fmt(m.parts_to_do)} parts`} size="sm" />
-                  </div>
-                  <div style={{ fontFamily: 'var(--mono)', fontSize: '0.62rem', color: 'var(--accent2)' }}>{m.command}</div>
-                  <div style={{ fontFamily: 'var(--mono)', fontSize: '0.6rem', color: 'var(--muted)', marginTop: 3 }}>Started: {m.create_time}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </ChCheckRow>
-        <ChCheckRow icon="⏱️" label="Missing Timestamp Partition" status={noTTL.status} detail={noTTL.detail}
-          tip="MergeTree tables without timestamp-based PARTITION BY. Required for tiered storage.">
-          {(noTTL.tables || []).length > 0 && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-              {noTTL.tables.map((t, i) => (
-                <span key={i} style={{
-                  background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)',
-                  color: 'var(--warn)', borderRadius: 5, padding: '3px 8px', fontFamily: 'var(--mono)', fontSize: '0.65rem',
-                }}>{t.database}.{t.table}</span>
-              ))}
-            </div>
-          )}
-        </ChCheckRow>
-
-        <GroupDivider label="Storage &amp; Errors" />
-        <div style={{ gridColumn: 'span 2' }}>
-          <ChCheckRow icon="💀" label="Detached / Corrupted Parts" status={detached.status} detail={detached.detail}
-            tip="Parts in detached/ due to corruption or manual detach. Excluded from queries.">
-            {(detached.parts || []).length > 0 && (
-              <DataTable cols={['Database', 'Table', 'Reason', 'Count']}>
-                {detached.parts.map((p, i) => (
-                  <tr key={i}>
-                    <td style={{ color: 'var(--error)' }}>{p.database}</td><td>{p.table}</td>
-                    <td style={{ color: 'var(--warn)' }}>{p.reason}</td>
-                    <td style={{ fontWeight: 700, color: 'var(--error)' }}>{p.count}</td>
-                  </tr>
+        {/* ── Replication & Consistency ── */}
+        <GroupDivider label="Replication &amp; Consistency" open={sections.replication} onToggle={() => toggle('replication')} />
+        {sections.replication && (<>
+          <ChCheckRow icon="🔒" label="Read-Only Tables" status={readOnly.status} detail={readOnly.detail}
+            tip="ReplicatedMergeTree tables in is_readonly=1 state. Caused by lost ZK connection.">
+            {(readOnly.tables || []).length > 0 && (
+              <DataTable cols={['Database', 'Table', 'Engine']}>
+                {readOnly.tables.map((t, i) => (
+                  <tr key={i}><td style={{ color: 'var(--error)' }}>{t.database}</td><td>{t.table}</td><td style={{ color: 'var(--muted)' }}>{t.engine}</td></tr>
                 ))}
               </DataTable>
             )}
           </ChCheckRow>
-        </div>
-        <ChCheckRow icon="📊" label="Top Table Sizes" status={tableSizes.status} detail={tableSizes.detail}
-          tip="Top 5 tables by compressed disk usage. Useful for capacity planning.">
-          {(tableSizes.tables || []).length > 0 && (
-            <div style={{ paddingTop: 4 }}>
-              {tableSizes.tables.map((t, i) => (
-                <SizeBar key={i} label={`${t.database}.${t.table}`} size={t.size} bytes={t.bytes || 0} maxBytes={maxBytes} />
-              ))}
-            </div>
-          )}
-        </ChCheckRow>
-        <div style={{ gridColumn: 'span 2' }}><ChErrors data={chErrors} /></div>
+          <ChCheckRow icon="🔁" label="Replication Queue Stuck" status={replStuck.status} detail={replStuck.detail}
+            tip="Replication queue entries postponed >100 times. High counts mean a replica is failing to sync.">
+            {(replStuck.jobs || []).length > 0 && (
+              <DataTable cols={['Database', 'Table', 'Count']}>
+                {replStuck.jobs.map((j, i) => (
+                  <tr key={i}><td style={{ color: 'var(--error)' }}>{j.database}</td><td>{j.table}</td><td style={{ fontWeight: 700 }}>{j.count}</td></tr>
+                ))}
+              </DataTable>
+            )}
+          </ChCheckRow>
+          <div style={{ gridColumn: 'span 2' }}><ReplicaInconsistencyRow replicaIncons={replicaIncons} /></div>
+          <div style={{ gridColumn: 'span 2' }}><ReplicaExceptions data={replicaExcept} /></div>
+        </>)}
+
+        {/* ── Schema & Config ── */}
+        <GroupDivider label="Schema &amp; Config" open={sections.schema} onToggle={() => toggle('schema')} />
+        {sections.schema && (<>
+          <ChCheckRow icon="💤" label="Inactive DDL Queries" status={inactiveQ.status} detail={inactiveQ.detail}
+            tip="DDL queries stuck in Inactive state. Block schema changes cluster-wide.">
+            {(inactiveQ.queries || []).length > 0 && (
+              <div>
+                {inactiveQ.queries.map((q, i) => (
+                  <div key={i} style={{ background: 'var(--surface)', borderRadius: 6, padding: '8px 10px', marginBottom: 5 }}>
+                    <div style={{ fontSize: '0.65rem', color: 'var(--warn)', fontFamily: 'var(--mono)' }}>{q.query}</div>
+                    <div style={{ fontSize: '0.6rem', color: 'var(--muted)', marginTop: 3, fontFamily: 'var(--mono)' }}>Created: {q.query_create_time}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </ChCheckRow>
+          <ChCheckRow icon="⚗️" label="Long-Running Mutations" status={longMut.status} detail={longMut.detail}
+            tip="ALTER TABLE mutations running >30 min. Hold resources and slow merges.">
+            {(longMut.mutations || []).length > 0 && (
+              <div>
+                {longMut.mutations.map((m, i) => (
+                  <div key={i} style={{ background: 'var(--surface)', borderRadius: 6, padding: '8px 10px', marginBottom: 5 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <span style={{ fontFamily: 'var(--mono)', fontSize: '0.68rem', fontWeight: 700 }}>{m.database}.{m.table}</span>
+                      <Badge status="warn" label={`${fmt(m.parts_to_do)} parts`} size="sm" />
+                    </div>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '0.62rem', color: 'var(--accent2)' }}>{m.command}</div>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '0.6rem', color: 'var(--muted)', marginTop: 3 }}>Started: {m.create_time}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </ChCheckRow>
+          <ChCheckRow icon="⏱️" label="Missing Timestamp Partition" status={noTTL.status} detail={noTTL.detail}
+            tip="MergeTree tables without timestamp-based PARTITION BY. Required for tiered storage.">
+            {(noTTL.tables || []).length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                {noTTL.tables.map((t, i) => (
+                  <span key={i} style={{
+                    background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.3)',
+                    color: 'var(--warn)', borderRadius: 5, padding: '3px 8px', fontFamily: 'var(--mono)', fontSize: '0.65rem',
+                  }}>{t.database}.{t.table}</span>
+                ))}
+              </div>
+            )}
+          </ChCheckRow>
+        </>)}
+
+        {/* ── Storage & Errors ── */}
+        <GroupDivider label="Storage &amp; Errors" open={sections.storage} onToggle={() => toggle('storage')} />
+        {sections.storage && (<>
+          <div style={{ gridColumn: 'span 2' }}>
+            <ChCheckRow icon="💀" label="Detached / Corrupted Parts" status={detached.status} detail={detached.detail}
+              tip="Parts in detached/ due to corruption or manual detach. Excluded from queries.">
+              {(detached.parts || []).length > 0 && (
+                <DataTable cols={['Database', 'Table', 'Reason', 'Count']}>
+                  {detached.parts.map((p, i) => (
+                    <tr key={i}>
+                      <td style={{ color: 'var(--error)' }}>{p.database}</td><td>{p.table}</td>
+                      <td style={{ color: 'var(--warn)' }}>{p.reason}</td>
+                      <td style={{ fontWeight: 700, color: 'var(--error)' }}>{p.count}</td>
+                    </tr>
+                  ))}
+                </DataTable>
+              )}
+            </ChCheckRow>
+          </div>
+          {/* Top Table Sizes — All DBs (left) + vusmart only (right) */}
+          <ChCheckRow icon="📊" label="Top Table Sizes (All)" status={tableSizes.status} detail={tableSizes.detail}
+            tip="Top 5 tables by compressed disk usage across all databases.">
+            {(tableSizes.tables || []).length > 0 && (
+              <div style={{ paddingTop: 4 }}>
+                {tableSizes.tables.map((t, i) => (
+                  <SizeBar key={i} label={`${t.database}.${t.table}`} size={t.size} bytes={t.bytes || 0} maxBytes={maxBytes} />
+                ))}
+              </div>
+            )}
+          </ChCheckRow>
+          <ChCheckRow icon="📊" label="Top Table Sizes (vusmart)" status={tableSizes.status}
+            detail={`Top ${(tableSizes.tables_vusmart || []).length} vusmart tables`}
+            tip="Top 5 tables by compressed disk usage in the vusmart database only.">
+            {(tableSizes.tables_vusmart || []).length > 0 && (
+              <div style={{ paddingTop: 4 }}>
+                {tableSizes.tables_vusmart.map((t, i) => (
+                  <SizeBar key={i} label={t.table} size={t.size} bytes={t.bytes || 0} maxBytes={maxBytesVusmart} />
+                ))}
+              </div>
+            )}
+          </ChCheckRow>
+          <div style={{ gridColumn: 'span 2' }}><ChErrors data={chErrors} /></div>
+          <div style={{ gridColumn: 'span 2' }}><ChErrorExplorer /></div>
+        </>)}
       </div>
     </>
   );
