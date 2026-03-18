@@ -1257,7 +1257,7 @@ async def check_clickhouse_connectivity() -> dict:
             },
             "Total Tables": {
                 "status": "ok",
-                "detail": f"{n} tables across {len(db_rows)} databases ({db_summary})",
+                "detail": f"{n} tables across {len(db_rows)} databases",
                 "databases": db_breakdown,
             },
             "Query Execution": {
@@ -1813,6 +1813,35 @@ async def get_ch_error_messages(code: int):
     except Exception as e:
         logger.error(f"/api/ch-error-messages failed: {e}")
         return {"code": code, "messages": [], "error": str(e)}
+
+
+@app.get("/api/ch-tables/{database}")
+async def get_ch_tables(database: str):
+    """List all tables in a ClickHouse database."""
+    logger.info(f"/api/ch-tables/{database}")
+    try:
+        ch = _get_ch()
+        rows = ch.query(
+            "SELECT name, engine, formatReadableSize(total_bytes) AS size, "
+            "total_bytes, total_rows "
+            "FROM system.tables "
+            f"WHERE database = '{database}' "
+            "ORDER BY total_bytes DESC NULLS LAST"
+        ).result_rows
+        tables = [
+            {
+                "name": r[0],
+                "engine": r[1],
+                "size": r[2] if r[2] else "0 B",
+                "bytes": r[3] or 0,
+                "rows": r[4] or 0,
+            }
+            for r in rows
+        ]
+        return {"database": database, "tables": tables}
+    except Exception as e:
+        logger.error(f"/api/ch-tables/{database} failed: {e}")
+        return {"database": database, "tables": [], "error": str(e)}
 
 
 def _fmt_retention(ms: int) -> str:

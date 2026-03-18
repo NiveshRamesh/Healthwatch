@@ -201,6 +201,126 @@ function Paginator({ page, pages, total, pageSize, onPrev, onNext }) {
   );
 }
 
+/* ── Database breakdown — expandable per-DB table list ────────────── */
+function DatabaseBreakdown({ databases }) {
+  const [expandedDb, setExpandedDb] = useState(null);
+  const [tables, setTables] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [tablePage, setTablePage] = useState(0);
+
+  const maxCount = Math.max(...databases.map(d => d.count), 1);
+
+  const handleClick = useCallback(async (db) => {
+    if (expandedDb === db) { setExpandedDb(null); return; }
+    setExpandedDb(db);
+    setTables([]);
+    setTablePage(0);
+    setLoading(true);
+    try {
+      const res = await fetch(`${BASE}/api/ch-tables/${encodeURIComponent(db)}`);
+      const json = await res.json();
+      setTables(json.tables || []);
+    } catch (e) {
+      console.error('fetch tables failed', e);
+      setTables([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [expandedDb]);
+
+  const tablePages = Math.ceil(tables.length / PAGE_SIZE);
+  const tableSlice = tables.slice(tablePage * PAGE_SIZE, (tablePage + 1) * PAGE_SIZE);
+
+  return (
+    <div style={{ padding: '0 20px 12px' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8 }}>
+        {databases.map(d => {
+          const isOpen = expandedDb === d.database;
+          const pct = (d.count / maxCount) * 100;
+          return (
+            <div key={d.database}
+              onClick={() => handleClick(d.database)}
+              style={{
+                borderRadius: 8, padding: '10px 12px', cursor: 'pointer',
+                background: isOpen ? 'rgba(0,212,170,0.08)' : 'var(--surface2)',
+                border: isOpen ? '1px solid rgba(0,212,170,0.3)' : '1px solid var(--border)',
+                transition: 'all 0.2s',
+              }}
+              onMouseEnter={e => { if (!isOpen) e.currentTarget.style.borderColor = 'rgba(0,212,170,0.2)'; }}
+              onMouseLeave={e => { if (!isOpen) e.currentTarget.style.borderColor = 'var(--border)'; }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, fontFamily: 'var(--mono)', color: 'var(--text)' }}>
+                  {d.database}
+                </span>
+                <span style={{
+                  fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent)',
+                  fontFamily: 'var(--mono)',
+                }}>{d.count}</span>
+              </div>
+              <div style={{ height: 4, background: 'var(--surface3)', borderRadius: 999, overflow: 'hidden' }}>
+                <div style={{
+                  height: '100%', width: `${pct}%`, borderRadius: 999,
+                  background: 'linear-gradient(90deg, var(--accent), var(--accent2))',
+                  transition: 'width 0.4s ease',
+                }} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {expandedDb && (
+        <div style={{
+          marginTop: 10, borderRadius: 10, overflow: 'hidden',
+          background: 'rgba(0,0,0,0.2)', border: '1px solid rgba(0,212,170,0.15)',
+          animation: 'fadeIn 0.2s ease',
+        }}>
+          <div style={{
+            padding: '10px 14px', borderBottom: '1px solid rgba(0,212,170,0.1)',
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          }}>
+            <span style={{
+              fontSize: '0.72rem', fontWeight: 700, fontFamily: 'var(--mono)', color: 'var(--accent)',
+            }}>📋 {expandedDb}</span>
+            <span style={{
+              fontSize: '0.62rem', color: 'var(--muted)', fontFamily: 'var(--mono)',
+            }}>{tables.length} table(s)</span>
+          </div>
+          <div style={{ padding: '8px 14px' }}>
+            {loading && (
+              <div style={{ fontSize: '0.68rem', color: 'var(--muted)', fontFamily: 'var(--mono)', padding: '8px 0' }}>
+                Loading tables...
+              </div>
+            )}
+            {!loading && tables.length > 0 && (
+              <>
+                <DataTable cols={['Table', 'Engine', 'Rows', 'Size']}>
+                  {tableSlice.map((t, i) => (
+                    <tr key={i}>
+                      <td style={{ fontWeight: 600 }}>{t.name}</td>
+                      <td style={{ color: 'var(--muted)' }}>{t.engine}</td>
+                      <td>{fmt(t.rows)}</td>
+                      <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{t.size}</td>
+                    </tr>
+                  ))}
+                </DataTable>
+                <Paginator page={tablePage} pages={tablePages} total={tables.length} pageSize={PAGE_SIZE}
+                  onPrev={() => setTablePage(p => p - 1)} onNext={() => setTablePage(p => p + 1)} />
+              </>
+            )}
+            {!loading && tables.length === 0 && (
+              <div style={{ fontSize: '0.68rem', color: 'var(--muted)', fontFamily: 'var(--mono)', padding: '8px 0' }}>
+                No tables found
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ── Sub-check components ─────────────────────────────────────────── */
 function ReplicaInconsistencyRow({ replicaIncons }) {
   const [page, setPage] = useState(0);
@@ -491,6 +611,11 @@ export default function ClickHousePanel({ checks }) {
     <>
       {/* KPI Status Strip */}
       <StatusStrip checks={checks} />
+
+      {/* Per-database table breakdown */}
+      {checks['Total Tables']?.databases?.length > 0 && (
+        <DatabaseBreakdown databases={checks['Total Tables'].databases} />
+      )}
 
       {/* Deep Checks header */}
       <div style={{
