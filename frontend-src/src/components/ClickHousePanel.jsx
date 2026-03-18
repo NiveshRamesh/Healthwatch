@@ -22,42 +22,87 @@ function ConnRow({ name, check }) {
   );
 }
 
-/* ── Single CH check row ─────────────────────────────────────────── */
+/* ── Check card ───────────────────────────────────────────────────── */
 function ChCheckRow({ icon, label, status, detail, children, tip }) {
   const [open, setOpen] = useState(false);
   const hasDetail = !!children;
+  const rgb = status === 'ok' ? '16,185,129' : status === 'warn' ? '245,158,11' : '239,68,68';
+
   return (
-    <div style={{ borderBottom:'1px solid rgba(30,45,69,0.4)', gridColumn: open ? 'span 2' : 'auto' }}>
+    <div style={{
+      margin:'4px', borderRadius:8, overflow:'hidden',
+      background:'var(--surface2)',
+      border:`1px solid rgba(${rgb},0.2)`,
+      borderLeft:`3px solid rgba(${rgb},0.7)`,
+    }}>
       <div
-        style={{
-          display:'flex', alignItems:'center', justifyContent:'space-between',
-          padding:'10px 22px 10px 38px', cursor: hasDetail ? 'pointer' : 'default',
-        }}
         onClick={() => hasDetail && setOpen(o => !o)}
-        onMouseEnter={e => { if (hasDetail) e.currentTarget.style.background='var(--surface2)'; }}
+        style={{
+          padding:'10px 12px', cursor: hasDetail ? 'pointer' : 'default',
+          display:'flex', alignItems:'flex-start', gap:9,
+        }}
+        onMouseEnter={e => { if (hasDetail) e.currentTarget.style.background='rgba(255,255,255,0.03)'; }}
         onMouseLeave={e => e.currentTarget.style.background='transparent'}
       >
-        <div style={{ display:'flex', alignItems:'center', gap:7 }}>
-          <span style={{ fontSize:'0.85rem' }}>{icon}</span>
-          <span style={{ fontSize:'0.82rem' }}>{label}</span>
-          <Tip text={tip} />
-        </div>
-        <div style={{ display:'flex', alignItems:'center', gap:8 }}>
-          <span style={{ fontSize:'0.72rem', color:'var(--muted)', fontFamily:'var(--mono)' }}>{detail}</span>
-          <Badge status={status} size="sm" />
-          {hasDetail && (
-            <span style={{ color:'var(--muted)', fontSize:'0.65rem', transition:'transform 0.2s',
-              transform: open ? 'rotate(180deg)' : 'none' }}>▼</span>
-          )}
+        <span style={{ fontSize:'1rem', flexShrink:0, marginTop:1 }}>{icon}</span>
+        <div style={{ flex:1, minWidth:0 }}>
+          <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:6 }}>
+            <span style={{ fontSize:'0.76rem', fontWeight:600, color:'var(--text)',
+              overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{label}</span>
+            <div style={{ display:'flex', alignItems:'center', gap:4, flexShrink:0 }}>
+              <Tip text={tip} />
+              <Badge status={status} size="sm" />
+              {hasDetail && (
+                <span style={{ color:'var(--muted)', fontSize:'0.58rem', transition:'transform 0.2s',
+                  transform: open ? 'rotate(180deg)' : 'none' }}>▼</span>
+              )}
+            </div>
+          </div>
+          <div style={{ fontSize:'0.67rem', color:'var(--muted)', fontFamily:'var(--mono)', marginTop:3,
+            overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{detail}</div>
         </div>
       </div>
       {open && hasDetail && (
-        <div style={{ background:'var(--surface2)', padding:'10px 22px 14px 38px',
-          borderTop:'1px solid var(--border)', animation:'fadeIn 0.2s ease' }}>
+        <div style={{ borderTop:`1px solid rgba(${rgb},0.15)`, padding:'10px 12px 12px',
+          background:'rgba(0,0,0,0.2)', animation:'fadeIn 0.2s ease' }}>
           {children}
         </div>
       )}
     </div>
+  );
+}
+
+/* ── Group label spanning both columns ────────────────────────────── */
+function GroupLabel({ label }) {
+  return (
+    <div style={{
+      gridColumn:'span 2', padding:'10px 6px 4px',
+      fontSize:'0.6rem', fontFamily:'var(--mono)', fontWeight:700,
+      color:'var(--muted)', textTransform:'uppercase', letterSpacing:'1.2px',
+      borderBottom:'1px solid rgba(255,255,255,0.06)', marginBottom:2,
+    }}>{label}</div>
+  );
+}
+
+/* ── Compact table helper ─────────────────────────────────────────── */
+function CompactTable({ cols, children }) {
+  return (
+    <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.64rem', fontFamily:'var(--mono)' }}>
+      <thead><tr>
+        {cols.map(h => (
+          <th key={h} style={{ textAlign:'left', padding:'3px 6px', color:'var(--muted)',
+            borderBottom:'1px solid var(--border)', fontWeight:600 }}>{h}</th>
+        ))}
+      </tr></thead>
+      <tbody>{React.Children.map(children, (row, i) =>
+        React.cloneElement(row, {
+          style: { background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.02)', ...row.props.style },
+          children: React.Children.map(row.props.children, td =>
+            React.cloneElement(td, { style: { padding:'3px 6px', ...td.props.style } })
+          ),
+        })
+      )}</tbody>
+    </table>
   );
 }
 
@@ -441,195 +486,164 @@ export default function ClickHousePanel({ checks }) {
         }
       >
 
-        {/* ── 2-column check grid ── */}
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr' }}>
+        {/* ── 2-column check card grid ── */}
+        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', padding:'4px 4px 8px' }}>
 
-        {/* Kafka Engine Consumer Lag */}
-        <ChKafkaEngineLag chKafkaLag={chKafkaLag} />
+          {/* ── Group: Kafka & Pipeline ── */}
+          <GroupLabel label="Kafka &amp; Pipeline" />
 
-        {/* #11 Unused Kafka Engine Tables */}
-        <ChCheckRow
-          icon="📭" label="Unused Kafka Engine Tables"
-          status={unusedKafka.status} detail={unusedKafka.detail}
-          tip="Kafka Engine tables whose last_commit_time is still epoch (1970). These tables exist but have never consumed a single message — likely misconfigured or abandoned."
-        >
-          {(unusedKafka.tables || []).length > 0 && (
-            <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
-              {(unusedKafka.tables || []).map((t, i) => (
-                <span key={i} style={{
-                  background:'rgba(245,158,11,0.1)', border:'1px solid rgba(245,158,11,0.25)',
-                  color:'var(--warn)', borderRadius:4, padding:'2px 7px',
-                  fontFamily:'var(--mono)', fontSize:'0.62rem',
-                }}>{t.database}.{t.table}</span>
-              ))}
-            </div>
-          )}
-        </ChCheckRow>
+          <ChKafkaEngineLag chKafkaLag={chKafkaLag} />
 
-        {/* #12 Read-only tables */}
-        <ChCheckRow
-          icon="🔒" label="Read-Only Replicated Tables"
-          status={readOnly.status} detail={readOnly.detail}
-          tip="ReplicatedMergeTree tables in is_readonly=1 state. These tables reject all INSERT/ALTER operations. Usually caused by lost ZooKeeper connection or missing replica path."
-        >
-          {(readOnly.tables || []).length > 0 && (
-            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.68rem', fontFamily:'var(--mono)' }}>
-              <thead><tr>
-                {['Database','Table','Engine'].map(h=>(
-                  <th key={h} style={{ textAlign:'left', padding:'4px 8px', color:'var(--muted)', borderBottom:'1px solid var(--border)' }}>{h}</th>
+          <ChCheckRow icon="📭" label="Unused Kafka Engine Tables"
+            status={unusedKafka.status} detail={unusedKafka.detail}
+            tip="Kafka Engine tables whose last_commit_time is still epoch (1970). These tables exist but have never consumed a single message — likely misconfigured or abandoned."
+          >
+            {(unusedKafka.tables || []).length > 0 && (
+              <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
+                {unusedKafka.tables.map((t, i) => (
+                  <span key={i} style={{ background:'rgba(245,158,11,0.1)', border:'1px solid rgba(245,158,11,0.25)',
+                    color:'var(--warn)', borderRadius:4, padding:'2px 6px', fontFamily:'var(--mono)', fontSize:'0.62rem',
+                  }}>{t.database}.{t.table}</span>
                 ))}
-              </tr></thead>
-              <tbody>{(readOnly.tables||[]).map((t,i)=>(
-                <tr key={i}><td style={{ padding:'4px 8px', color:'var(--error)' }}>{t.database}</td>
-                <td style={{ padding:'4px 8px' }}>{t.table}</td>
-                <td style={{ padding:'4px 8px', color:'var(--muted)' }}>{t.engine}</td></tr>
-              ))}</tbody>
-            </table>
-          )}
-        </ChCheckRow>
-
-        {/* #13 Inactive DDL queries */}
-        <ChCheckRow
-          icon="💤" label="Inactive DDL Queries"
-          status={inactiveQ.status} detail={inactiveQ.detail}
-          tip="DDL queries (CREATE/DROP/ALTER) stuck in Inactive state in system.distributed_ddl_queue. These block schema changes cluster-wide until resolved or manually removed."
-        >
-          {(inactiveQ.queries || []).length > 0 && (
-            <div>{(inactiveQ.queries||[]).map((q,i)=>(
-              <div key={i} style={{ marginBottom:6 }}>
-                <div style={{ fontSize:'0.65rem', color:'var(--warn)', fontFamily:'var(--mono)' }}>{q.query}</div>
-                <div style={{ fontSize:'0.62rem', color:'var(--muted)', marginTop:2, fontFamily:'var(--mono)' }}>Created: {q.query_create_time}</div>
               </div>
-            ))}</div>
-          )}
-        </ChCheckRow>
+            )}
+          </ChCheckRow>
 
-        {/* #14 Long-running mutations */}
-        <ChCheckRow
-          icon="⚗️" label="Long-Running Mutations (>30min)"
-          status={longMut.status} detail={longMut.detail}
-          tip="ALTER TABLE mutations (UPDATE/DELETE/column changes) running for more than 30 minutes. Threshold: 30 min. Long mutations hold resources and slow down merges."
-        >
-          {(longMut.mutations || []).length > 0 && (
-            <div>
-              {(longMut.mutations||[]).map((m,i)=>(
-                <div key={i} style={{ background:'var(--surface3)', borderRadius:6, padding:'8px 12px', marginBottom:6 }}>
-                  <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
-                    <span style={{ fontFamily:'var(--mono)', fontSize:'0.68rem', color:'var(--text)', fontWeight:700 }}>
-                      {m.database}.{m.table}
-                    </span>
-                    <Badge status="warn" label={`${fmt(m.parts_to_do)} parts left`} size="sm" />
+          <KafkaPipelineHealth data={kafkaPipeline} />
+          <IngestionRate data={ingestionRate} />
+
+          {/* ── Group: Replication & Consistency ── */}
+          <GroupLabel label="Replication &amp; Consistency" />
+
+          <ChCheckRow icon="🔒" label="Read-Only Replicated Tables"
+            status={readOnly.status} detail={readOnly.detail}
+            tip="ReplicatedMergeTree tables in is_readonly=1 state. These tables reject all INSERT/ALTER operations. Usually caused by lost ZooKeeper connection or missing replica path."
+          >
+            {(readOnly.tables || []).length > 0 && (
+              <CompactTable cols={['DB','Table','Engine']}>
+                {readOnly.tables.map((t, i) => (
+                  <tr key={i}>
+                    <td style={{ color:'var(--error)' }}>{t.database}</td>
+                    <td>{t.table}</td>
+                    <td style={{ color:'var(--muted)' }}>{t.engine}</td>
+                  </tr>
+                ))}
+              </CompactTable>
+            )}
+          </ChCheckRow>
+
+          <ChCheckRow icon="🔁" label="Replication Queue Stuck"
+            status={replStuck.status} detail={replStuck.detail}
+            tip="Replication queue entries postponed more than 100 times (threshold: 100). High postpone counts mean a replica is consistently failing to replicate — data may fall behind."
+          >
+            {(replStuck.jobs || []).length > 0 && (
+              <CompactTable cols={['DB','Table','Count']}>
+                {replStuck.jobs.map((j, i) => (
+                  <tr key={i}>
+                    <td style={{ color:'var(--error)' }}>{j.database}</td>
+                    <td>{j.table}</td>
+                    <td style={{ fontWeight:700 }}>{j.count}</td>
+                  </tr>
+                ))}
+              </CompactTable>
+            )}
+          </ChCheckRow>
+
+          <ReplicaInconsistencyRow replicaIncons={replicaIncons} />
+          <ReplicaExceptions data={replicaExcept} />
+
+          {/* ── Group: Schema & Config ── */}
+          <GroupLabel label="Schema &amp; Config" />
+
+          <ChCheckRow icon="💤" label="Inactive DDL Queries"
+            status={inactiveQ.status} detail={inactiveQ.detail}
+            tip="DDL queries (CREATE/DROP/ALTER) stuck in Inactive state in system.distributed_ddl_queue. These block schema changes cluster-wide until resolved or manually removed."
+          >
+            {(inactiveQ.queries || []).length > 0 && (
+              <div>
+                {inactiveQ.queries.map((q, i) => (
+                  <div key={i} style={{ marginBottom:6 }}>
+                    <div style={{ fontSize:'0.62rem', color:'var(--warn)', fontFamily:'var(--mono)' }}>{q.query}</div>
+                    <div style={{ fontSize:'0.6rem', color:'var(--muted)', marginTop:2, fontFamily:'var(--mono)' }}>Created: {q.query_create_time}</div>
                   </div>
-                  <div style={{ fontFamily:'var(--mono)', fontSize:'0.62rem', color:'var(--accent2)', marginBottom:2 }}>{m.command}</div>
-                  <div style={{ fontFamily:'var(--mono)', fontSize:'0.6rem', color:'var(--muted)' }}>Started: {m.create_time}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </ChCheckRow>
-
-        {/* #15 Tables without TTL */}
-        <ChCheckRow
-          icon="⏱️" label="Tables Without Timestamp Partition"
-          status={noTTL.status} detail={noTTL.detail}
-          tip="MergeTree tables missing a timestamp-based PARTITION BY (toYYYYMMDD, toYYYYMM, toDate, toStartOf*). Timestamp partitioning is required for hot→warm tiered storage. Tables without it cannot be moved between storage tiers."
-        >
-          {(noTTL.tables || []).length > 0 && (
-            <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
-              {(noTTL.tables||[]).map((t,i)=>(
-                <span key={i} style={{
-                  background:'rgba(245,158,11,0.1)', border:'1px solid rgba(245,158,11,0.25)',
-                  color:'var(--warn)', borderRadius:4, padding:'2px 7px',
-                  fontFamily:'var(--mono)', fontSize:'0.62rem',
-                }}>{t.database}.{t.table}</span>
-              ))}
-            </div>
-          )}
-        </ChCheckRow>
-
-        {/* #16 Detached/corrupted parts */}
-        <ChCheckRow
-          icon="💀" label="Detached / Corrupted Parts"
-          status={detached.status} detail={detached.detail}
-          tip="Data parts moved to the detached/ folder due to corruption, checksum errors, or manual detach. Detached parts are excluded from queries — data may be lost or unreadable."
-        >
-          {(detached.parts || []).length > 0 && (
-            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.68rem', fontFamily:'var(--mono)' }}>
-              <thead><tr>
-                {['Database','Table','Reason','Count'].map(h=>(
-                  <th key={h} style={{ textAlign:'left', padding:'4px 8px', color:'var(--muted)', borderBottom:'1px solid var(--border)' }}>{h}</th>
                 ))}
-              </tr></thead>
-              <tbody>{(detached.parts||[]).map((p,i)=>(
-                <tr key={i} style={{ background: i%2===0?'transparent':'rgba(239,68,68,0.04)' }}>
-                  <td style={{ padding:'4px 8px', color:'var(--error)' }}>{p.database}</td>
-                  <td style={{ padding:'4px 8px' }}>{p.table}</td>
-                  <td style={{ padding:'4px 8px', color:'var(--warn)' }}>{p.reason}</td>
-                  <td style={{ padding:'4px 8px', fontWeight:700, color:'var(--error)' }}>{p.count}</td>
-                </tr>
-              ))}</tbody>
-            </table>
-          )}
-        </ChCheckRow>
+              </div>
+            )}
+          </ChCheckRow>
 
-        {/* #17 Table sizes — always shown */}
-        <ChCheckRow
-          icon="📊" label="Top Table Sizes"
-          status={tableSizes.status} detail={tableSizes.detail}
-          tip="Top 5 tables by compressed disk usage from system.parts. Useful for tracking which tables consume the most storage and planning capacity."
-        >
-          {(tableSizes.tables || []).length > 0 && (
-            <div style={{ paddingTop:4 }}>
-              {(tableSizes.tables||[]).map((t,i)=>(
-                <SizeBar key={i}
-                  label={`${t.database}.${t.table}`}
-                  size={t.size}
-                  bytes={t.bytes||0}
-                  maxBytes={maxBytes}
-                />
-              ))}
-            </div>
-          )}
-        </ChCheckRow>
-
-        {/* #18 Replication queue stuck */}
-        <ChCheckRow
-          icon="🔁" label="Replication Queue Stuck Jobs"
-          status={replStuck.status} detail={replStuck.detail}
-          tip="Replication queue entries postponed more than 100 times (threshold: 100). High postpone counts mean a replica is consistently failing to replicate — data may fall behind."
-        >
-          {(replStuck.jobs || []).length > 0 && (
-            <table style={{ width:'100%', borderCollapse:'collapse', fontSize:'0.68rem', fontFamily:'var(--mono)' }}>
-              <thead><tr>
-                {['Database','Table','Count'].map(h=>(
-                  <th key={h} style={{ textAlign:'left', padding:'4px 8px', color:'var(--muted)', borderBottom:'1px solid var(--border)' }}>{h}</th>
+          <ChCheckRow icon="⚗️" label="Long-Running Mutations"
+            status={longMut.status} detail={longMut.detail}
+            tip="ALTER TABLE mutations (UPDATE/DELETE/column changes) running for more than 30 minutes. Threshold: 30 min. Long mutations hold resources and slow down merges."
+          >
+            {(longMut.mutations || []).length > 0 && (
+              <div>
+                {longMut.mutations.map((m, i) => (
+                  <div key={i} style={{ background:'var(--surface)', borderRadius:5, padding:'6px 8px', marginBottom:5 }}>
+                    <div style={{ display:'flex', justifyContent:'space-between', marginBottom:3 }}>
+                      <span style={{ fontFamily:'var(--mono)', fontSize:'0.65rem', fontWeight:700 }}>{m.database}.{m.table}</span>
+                      <Badge status="warn" label={`${fmt(m.parts_to_do)} parts`} size="sm" />
+                    </div>
+                    <div style={{ fontFamily:'var(--mono)', fontSize:'0.6rem', color:'var(--accent2)', marginBottom:2 }}>{m.command}</div>
+                    <div style={{ fontFamily:'var(--mono)', fontSize:'0.58rem', color:'var(--muted)' }}>Started: {m.create_time}</div>
+                  </div>
                 ))}
-              </tr></thead>
-              <tbody>{(replStuck.jobs||[]).map((j,i)=>(
-                <tr key={i}><td style={{ padding:'4px 8px', color:'var(--error)' }}>{j.database}</td>
-                <td style={{ padding:'4px 8px' }}>{j.table}</td>
-                <td style={{ padding:'4px 8px', fontWeight:700 }}>{j.count}</td></tr>
-              ))}</tbody>
-            </table>
-          )}
-        </ChCheckRow>
+              </div>
+            )}
+          </ChCheckRow>
 
-        {/* #19 Replica inconsistency — paginated */}
-        <ReplicaInconsistencyRow replicaIncons={replicaIncons} />
+          <ChCheckRow icon="⏱️" label="Missing Timestamp Partition"
+            status={noTTL.status} detail={noTTL.detail}
+            tip="MergeTree tables missing a timestamp-based PARTITION BY (toYYYYMMDD, toYYYYMM, toDate, toStartOf*). Timestamp partitioning is required for hot→warm tiered storage. Tables without it cannot be moved between storage tiers."
+          >
+            {(noTTL.tables || []).length > 0 && (
+              <div style={{ display:'flex', flexWrap:'wrap', gap:4 }}>
+                {noTTL.tables.map((t, i) => (
+                  <span key={i} style={{ background:'rgba(245,158,11,0.1)', border:'1px solid rgba(245,158,11,0.25)',
+                    color:'var(--warn)', borderRadius:4, padding:'2px 6px', fontFamily:'var(--mono)', fontSize:'0.62rem',
+                  }}>{t.database}.{t.table}</span>
+                ))}
+              </div>
+            )}
+          </ChCheckRow>
 
-        {/* #21 Kafka pipeline health */}
-        <KafkaPipelineHealth data={kafkaPipeline} />
+          {/* ── Group: Storage & Errors ── */}
+          <GroupLabel label="Storage &amp; Errors" />
 
-        {/* #22 Ingestion rate */}
-        <IngestionRate data={ingestionRate} />
+          <ChCheckRow icon="💀" label="Detached / Corrupted Parts"
+            status={detached.status} detail={detached.detail}
+            tip="Data parts moved to the detached/ folder due to corruption, checksum errors, or manual detach. Detached parts are excluded from queries — data may be lost or unreadable."
+          >
+            {(detached.parts || []).length > 0 && (
+              <CompactTable cols={['DB','Table','Reason','Cnt']}>
+                {detached.parts.map((p, i) => (
+                  <tr key={i}>
+                    <td style={{ color:'var(--error)' }}>{p.database}</td>
+                    <td>{p.table}</td>
+                    <td style={{ color:'var(--warn)' }}>{p.reason}</td>
+                    <td style={{ fontWeight:700, color:'var(--error)' }}>{p.count}</td>
+                  </tr>
+                ))}
+              </CompactTable>
+            )}
+          </ChCheckRow>
 
-        {/* #23 Replica exceptions */}
-        <ReplicaExceptions data={replicaExcept} />
+          <ChCheckRow icon="📊" label="Top Table Sizes"
+            status={tableSizes.status} detail={tableSizes.detail}
+            tip="Top 5 tables by compressed disk usage from system.parts. Useful for tracking which tables consume the most storage and planning capacity."
+          >
+            {(tableSizes.tables || []).length > 0 && (
+              <div style={{ paddingTop:2 }}>
+                {tableSizes.tables.map((t, i) => (
+                  <SizeBar key={i} label={`${t.database}.${t.table}`}
+                    size={t.size} bytes={t.bytes||0} maxBytes={maxBytes} />
+                ))}
+              </div>
+            )}
+          </ChCheckRow>
 
-        {/* #24 ClickHouse errors */}
-        <ChErrors data={chErrors} />
+          <ChErrors data={chErrors} />
 
-        </div>{/* end 2-col check grid */}
+        </div>{/* end check grid */}
       </SubSection>
     </>
   );
