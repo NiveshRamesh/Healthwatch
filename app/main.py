@@ -1817,7 +1817,7 @@ async def get_ch_error_messages(code: int):
 
 @app.get("/api/ch-tables/{database}")
 async def get_ch_tables(database: str):
-    """List all tables in a ClickHouse database."""
+    """List all tables in a ClickHouse database, grouped by engine type."""
     logger.info(f"/api/ch-tables/{database}")
     try:
         ch = _get_ch()
@@ -1838,10 +1838,151 @@ async def get_ch_tables(database: str):
             }
             for r in rows
         ]
-        return {"database": database, "tables": tables}
+        # Group by engine category
+        groups = {}
+        for t in tables:
+            eng = t["engine"]
+            if "ReplicatedMergeTree" in eng:
+                cat = "ReplicatedMergeTree"
+            elif "MergeTree" in eng and "Replicated" not in eng:
+                cat = "MergeTree"
+            elif eng == "Distributed":
+                cat = "Distributed"
+            elif eng == "Kafka":
+                cat = "Kafka"
+            elif eng == "MaterializedView":
+                cat = "MaterializedView"
+            elif eng == "View":
+                cat = "View"
+            else:
+                cat = "Other"
+            groups.setdefault(cat, []).append(t)
+        return {"database": database, "tables": tables, "groups": groups}
     except Exception as e:
         logger.error(f"/api/ch-tables/{database} failed: {e}")
-        return {"database": database, "tables": [], "error": str(e)}
+        return {"database": database, "tables": [], "groups": {}, "error": str(e)}
+
+
+@app.get("/api/ch-table-detail/{database}/{table}")
+async def get_ch_table_detail(database: str, table: str):
+    """Full diagnosis of a single ClickHouse table."""
+    logger.info(f"/api/ch-table-detail/{database}/{table}")
+    try:
+        ch = _get_ch()
+
+        def q(sql):
+            return ch.query(sql).result_rows
+
+        # Basic table info
+        info_rows = q(
+            "SELECT engine, create_table_query, partition_key, sorting_key, "
+            "primary_key, sampling_key, total_rows, total_bytes, "
+            "formatReadableSize(total_bytes), lifetime_rows, lifetime_bytes, "
+            "metadata_modification_time, engine_full "
+            f"FROM system.tables WHERE database='{database}' AND name='{table}'"
+        )
+        if not info_rows:
+            return {"found": False, "database": database, "table": table}
+
+        r = info_rows[0]
+        info = {
+            "engine": r[0], "create_query": r[1], "partition_key": r[2] or "—",
+            "sorting_key": r[3] or "—", "primary_key": r[4] or "—",
+            "sampling_key": r[5] or "—",
+            "total_rows": r[6] or 0, "total_bytes": r[7] or 0,
+            "total_size": r[8] or "0 B",
+            "lifetime_rows": r[9] or 0, "lifetime_bytes": r[10] or 0,
+            "last_modified": str(r[11]) if r[11] else "—",
+            "engine_full": r[12] or r[0],
+        }
+
+        # Parts info
+        parts = []
+        try:
+            part_rows = q(
+                "SELECT partition, count() AS parts, sum(rows) AS rows, "
+                "formatReadableSize(sum(bytes_on_disk)) AS size, sum(bytes_on_disk), "
+                "min(modification_time), max(modification_time) "
+                f"FROM system.parts WHERE database='{database}' AND table='{table}' "
+                "AND active=1 GROUP BY partition ORDER BY partition"
+            )
+            parts = [
+                {
+                    "partition": str(p[0]), "parts": p[1], "rows": p[2],
+                    "size": p[3], "bytes": p[4],
+                    "min_time": str(p[5]), "max_time": str(p[6]),
+                }
+                for p in part_rows
+            ]
+        except Exception:
+            pass
+
+        # Columns
+        columns = []
+        try:
+            col_rows = q(
+                "SELECT name, type, default_kind, comment "
+                f"FROM system.columns WHERE database='{database}' AND table='{table}' "
+                "ORDER BY position"
+            )
+            columns = [
+                {"name": c[0], "type": c[1], "default": c[2] or "—", "comment": c[3] or ""}
+                for c in col_rows
+            ]
+        except Exception:
+            pass
+
+        # Replicas (if replicated)
+        replicas = []
+        if "Replicated" in info["engine"]:
+            try:
+                repl_rows = q(
+                    "SELECT replica_name, is_leader, is_readonly, "
+                    "queue_size, inserts_in_queue, merges_in_queue, "
+                    "absolute_delay, total_replicas, active_replicas "
+                    f"FROM system.replicas WHERE database='{database}' AND table='{table}'"
+                )
+                replicas = [
+                    {
+                        "replica": rr[0], "is_leader": bool(rr[1]),
+                        "is_readonly": bool(rr[2]), "queue_size": rr[3],
+                        "inserts_in_queue": rr[4], "merges_in_queue": rr[5],
+                        "delay_seconds": rr[6],
+                        "total_replicas": rr[7], "active_replicas": rr[8],
+                    }
+                    for rr in repl_rows
+                ]
+            except Exception:
+                pass
+
+        # Recent mutations
+        mutations = []
+        try:
+            mut_rows = q(
+                "SELECT command, create_time, is_done, parts_to_do, "
+                "latest_fail_reason "
+                f"FROM system.mutations WHERE database='{database}' AND table='{table}' "
+                "ORDER BY create_time DESC LIMIT 5"
+            )
+            mutations = [
+                {
+                    "command": m[0][:200], "create_time": str(m[1]),
+                    "is_done": bool(m[2]), "parts_to_do": m[3],
+                    "fail_reason": m[4] or "",
+                }
+                for m in mut_rows
+            ]
+        except Exception:
+            pass
+
+        return {
+            "found": True, "database": database, "table": table,
+            "info": info, "parts": parts, "columns": columns,
+            "replicas": replicas, "mutations": mutations,
+        }
+    except Exception as e:
+        logger.error(f"/api/ch-table-detail failed: {e}\n{traceback.format_exc()}")
+        return {"found": False, "database": database, "table": table, "error": str(e)}
 
 
 def _fmt_retention(ms: int) -> str:

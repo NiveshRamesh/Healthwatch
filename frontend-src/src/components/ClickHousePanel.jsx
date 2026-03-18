@@ -1,6 +1,7 @@
 import React, { useState, useCallback } from 'react';
 import { Badge, Tip, Chip } from './Shared';
 import { fmt } from '../utils';
+import Modal from './Modal';
 
 const BASE = '/healthwatch';
 
@@ -201,70 +202,127 @@ function Paginator({ page, pages, total, pageSize, onPrev, onNext }) {
   );
 }
 
-/* ── Database breakdown — expandable per-DB table list ────────────── */
+/* ── Engine group icons & colors ──────────────────────────────────── */
+const ENGINE_META = {
+  ReplicatedMergeTree: { icon: '🔁', color: '0,212,170' },
+  MergeTree:           { icon: '🌲', color: '0,212,170' },
+  Distributed:         { icon: '🌐', color: '0,153,255' },
+  Kafka:               { icon: '⚡', color: '245,158,11' },
+  MaterializedView:    { icon: '👁️', color: '168,85,247' },
+  View:                { icon: '👁️', color: '100,116,139' },
+  Other:               { icon: '📦', color: '100,116,139' },
+};
+
+/* ── Engine group section (collapsible table list) ───────────────── */
+function EngineGroup({ engine, tables }) {
+  const [open, setOpen] = useState(false);
+  const [page, setPage] = useState(0);
+  const meta = ENGINE_META[engine] || ENGINE_META.Other;
+  const pages = Math.ceil(tables.length / PAGE_SIZE);
+  const slice = tables.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+  return (
+    <div style={{
+      borderRadius: 8, overflow: 'hidden', marginBottom: 6,
+      border: `1px solid rgba(${meta.color},0.15)`,
+      background: `rgba(${meta.color},0.03)`,
+    }}>
+      <div onClick={() => { setOpen(o => !o); setPage(0); }} style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '8px 12px', cursor: 'pointer',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ fontSize: '0.85rem' }}>{meta.icon}</span>
+          <span style={{ fontSize: '0.72rem', fontWeight: 600, fontFamily: 'var(--mono)', color: 'var(--text)' }}>
+            {engine}
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{
+            padding: '2px 8px', borderRadius: 4, fontSize: '0.62rem', fontWeight: 700,
+            background: `rgba(${meta.color},0.12)`, color: `rgb(${meta.color})`,
+            fontFamily: 'var(--mono)',
+          }}>{tables.length}</span>
+          <span style={{
+            color: 'var(--muted)', fontSize: '0.6rem', transition: 'transform 0.2s',
+            transform: open ? 'rotate(180deg)' : 'none',
+          }}>▼</span>
+        </div>
+      </div>
+      {open && (
+        <div style={{ padding: '4px 12px 10px', borderTop: `1px solid rgba(${meta.color},0.1)` }}>
+          <DataTable cols={['Table', 'Rows', 'Size']}>
+            {slice.map((t, i) => (
+              <tr key={i}>
+                <td style={{ fontWeight: 600 }}>{t.name}</td>
+                <td>{fmt(t.rows)}</td>
+                <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{t.size}</td>
+              </tr>
+            ))}
+          </DataTable>
+          <Paginator page={page} pages={pages} total={tables.length} pageSize={PAGE_SIZE}
+            onPrev={() => setPage(p => p - 1)} onNext={() => setPage(p => p + 1)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Database breakdown — expandable per-DB with engine groups ────── */
 function DatabaseBreakdown({ databases }) {
   const [expandedDb, setExpandedDb] = useState(null);
-  const [tables, setTables] = useState([]);
+  const [groups, setGroups] = useState({});
   const [loading, setLoading] = useState(false);
-  const [tablePage, setTablePage] = useState(0);
-
-  const maxCount = Math.max(...databases.map(d => d.count), 1);
 
   const handleClick = useCallback(async (db) => {
     if (expandedDb === db) { setExpandedDb(null); return; }
     setExpandedDb(db);
-    setTables([]);
-    setTablePage(0);
+    setGroups({});
     setLoading(true);
     try {
       const res = await fetch(`${BASE}/api/ch-tables/${encodeURIComponent(db)}`);
       const json = await res.json();
-      setTables(json.tables || []);
+      setGroups(json.groups || {});
     } catch (e) {
       console.error('fetch tables failed', e);
-      setTables([]);
+      setGroups({});
     } finally {
       setLoading(false);
     }
   }, [expandedDb]);
 
-  const tablePages = Math.ceil(tables.length / PAGE_SIZE);
-  const tableSlice = tables.slice(tablePage * PAGE_SIZE, (tablePage + 1) * PAGE_SIZE);
+  // Engine group display order
+  const engineOrder = ['ReplicatedMergeTree', 'MergeTree', 'Distributed', 'Kafka', 'MaterializedView', 'View', 'Other'];
+  const sortedEngines = Object.keys(groups).sort((a, b) => {
+    const ai = engineOrder.indexOf(a), bi = engineOrder.indexOf(b);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
 
   return (
     <div style={{ padding: '0 20px 12px' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 8 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 8 }}>
         {databases.map(d => {
           const isOpen = expandedDb === d.database;
-          const pct = (d.count / maxCount) * 100;
           return (
             <div key={d.database}
               onClick={() => handleClick(d.database)}
               style={{
-                borderRadius: 8, padding: '10px 12px', cursor: 'pointer',
+                borderRadius: 8, padding: '10px 14px', cursor: 'pointer',
                 background: isOpen ? 'rgba(0,212,170,0.08)' : 'var(--surface2)',
                 border: isOpen ? '1px solid rgba(0,212,170,0.3)' : '1px solid var(--border)',
-                transition: 'all 0.2s',
+                transition: 'all 0.2s', textAlign: 'center',
               }}
               onMouseEnter={e => { if (!isOpen) e.currentTarget.style.borderColor = 'rgba(0,212,170,0.2)'; }}
               onMouseLeave={e => { if (!isOpen) e.currentTarget.style.borderColor = 'var(--border)'; }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, fontFamily: 'var(--mono)', color: 'var(--text)' }}>
-                  {d.database}
-                </span>
-                <span style={{
-                  fontSize: '0.72rem', fontWeight: 700, color: 'var(--accent)',
-                  fontFamily: 'var(--mono)',
-                }}>{d.count}</span>
+              <div style={{ fontSize: '0.72rem', fontWeight: 600, fontFamily: 'var(--mono)', color: 'var(--text)' }}>
+                {d.database}
               </div>
-              <div style={{ height: 4, background: 'var(--surface3)', borderRadius: 999, overflow: 'hidden' }}>
-                <div style={{
-                  height: '100%', width: `${pct}%`, borderRadius: 999,
-                  background: 'linear-gradient(90deg, var(--accent), var(--accent2))',
-                  transition: 'width 0.4s ease',
-                }} />
-              </div>
+              <div style={{
+                fontSize: '1.1rem', fontWeight: 700, color: 'var(--accent)',
+                fontFamily: 'var(--mono)', marginTop: 4,
+              }}>{d.count}</div>
+              <div style={{ fontSize: '0.6rem', color: 'var(--muted)', marginTop: 2 }}>tables</div>
             </div>
           );
         })}
@@ -285,31 +343,20 @@ function DatabaseBreakdown({ databases }) {
             }}>📋 {expandedDb}</span>
             <span style={{
               fontSize: '0.62rem', color: 'var(--muted)', fontFamily: 'var(--mono)',
-            }}>{tables.length} table(s)</span>
+            }}>
+              {Object.values(groups).reduce((sum, arr) => sum + arr.length, 0)} table(s) · {sortedEngines.length} engine type(s)
+            </span>
           </div>
-          <div style={{ padding: '8px 14px' }}>
+          <div style={{ padding: '8px 12px' }}>
             {loading && (
               <div style={{ fontSize: '0.68rem', color: 'var(--muted)', fontFamily: 'var(--mono)', padding: '8px 0' }}>
                 Loading tables...
               </div>
             )}
-            {!loading && tables.length > 0 && (
-              <>
-                <DataTable cols={['Table', 'Engine', 'Rows', 'Size']}>
-                  {tableSlice.map((t, i) => (
-                    <tr key={i}>
-                      <td style={{ fontWeight: 600 }}>{t.name}</td>
-                      <td style={{ color: 'var(--muted)' }}>{t.engine}</td>
-                      <td>{fmt(t.rows)}</td>
-                      <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{t.size}</td>
-                    </tr>
-                  ))}
-                </DataTable>
-                <Paginator page={tablePage} pages={tablePages} total={tables.length} pageSize={PAGE_SIZE}
-                  onPrev={() => setTablePage(p => p - 1)} onNext={() => setTablePage(p => p + 1)} />
-              </>
-            )}
-            {!loading && tables.length === 0 && (
+            {!loading && sortedEngines.length > 0 && sortedEngines.map(eng => (
+              <EngineGroup key={eng} engine={eng} tables={groups[eng]} />
+            ))}
+            {!loading && sortedEngines.length === 0 && !loading && (
               <div style={{ fontSize: '0.68rem', color: 'var(--muted)', fontFamily: 'var(--mono)', padding: '8px 0' }}>
                 No tables found
               </div>
@@ -581,8 +628,273 @@ function ChErrors({ data }) {
   );
 }
 
+/* ── Table Detail display ─────────────────────────────────────────── */
+function TableDetail({ data }) {
+  const [partPage, setPartPage] = useState(0);
+  const [colPage, setColPage] = useState(0);
+
+  if (!data.found) {
+    return (
+      <div style={{ padding: 12, color: 'var(--error)', fontFamily: 'var(--mono)', fontSize: '0.75rem' }}>
+        Table not found{data.error ? `: ${data.error}` : ''}
+      </div>
+    );
+  }
+
+  const { info, parts = [], columns = [], replicas = [], mutations = [] } = data;
+  const partPages = Math.ceil(parts.length / PAGE_SIZE);
+  const partSlice = parts.slice(partPage * PAGE_SIZE, (partPage + 1) * PAGE_SIZE);
+  const colPages = Math.ceil(columns.length / PAGE_SIZE);
+  const colSlice = columns.slice(colPage * PAGE_SIZE, (colPage + 1) * PAGE_SIZE);
+
+  const kv = (label, val, color) => (
+    <div style={{ marginBottom: 6 }}>
+      <div style={{ fontSize: '0.58rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</div>
+      <div style={{ fontSize: '0.72rem', fontFamily: 'var(--mono)', fontWeight: 600, color: color || 'var(--text)', marginTop: 2 }}>{val}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* Summary grid */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px 16px' }}>
+        {kv('Engine', info.engine, 'var(--accent)')}
+        {kv('Rows', fmt(info.total_rows))}
+        {kv('Size', info.total_size, 'var(--accent)')}
+        {kv('Partition Key', info.partition_key)}
+        {kv('Sorting Key', info.sorting_key)}
+        {kv('Last Modified', info.last_modified)}
+      </div>
+
+      {/* Replicas */}
+      {replicas.length > 0 && (
+        <div>
+          <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--accent)', marginBottom: 6, fontFamily: 'var(--mono)', textTransform: 'uppercase' }}>
+            Replicas
+          </div>
+          <DataTable cols={['Replica', 'Leader', 'Readonly', 'Queue', 'Delay']}>
+            {replicas.map((r, i) => (
+              <tr key={i}>
+                <td style={{ fontWeight: 600 }}>{r.replica}</td>
+                <td style={{ color: r.is_leader ? 'var(--ok)' : 'var(--muted)' }}>{r.is_leader ? 'YES' : 'no'}</td>
+                <td style={{ color: r.is_readonly ? 'var(--error)' : 'var(--ok)' }}>{r.is_readonly ? 'YES' : 'no'}</td>
+                <td>{r.queue_size}</td>
+                <td style={{ color: r.delay_seconds > 10 ? 'var(--warn)' : 'var(--muted)' }}>{r.delay_seconds}s</td>
+              </tr>
+            ))}
+          </DataTable>
+        </div>
+      )}
+
+      {/* Partitions */}
+      {parts.length > 0 && (
+        <div>
+          <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--accent)', marginBottom: 6, fontFamily: 'var(--mono)', textTransform: 'uppercase' }}>
+            Partitions ({parts.length})
+          </div>
+          <DataTable cols={['Partition', 'Parts', 'Rows', 'Size']}>
+            {partSlice.map((p, i) => (
+              <tr key={i}>
+                <td style={{ fontWeight: 600 }}>{p.partition}</td>
+                <td>{p.parts}</td>
+                <td>{fmt(p.rows)}</td>
+                <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{p.size}</td>
+              </tr>
+            ))}
+          </DataTable>
+          <Paginator page={partPage} pages={partPages} total={parts.length} pageSize={PAGE_SIZE}
+            onPrev={() => setPartPage(p => p - 1)} onNext={() => setPartPage(p => p + 1)} />
+        </div>
+      )}
+
+      {/* Columns */}
+      {columns.length > 0 && (
+        <div>
+          <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--accent)', marginBottom: 6, fontFamily: 'var(--mono)', textTransform: 'uppercase' }}>
+            Columns ({columns.length})
+          </div>
+          <DataTable cols={['Name', 'Type', 'Default']}>
+            {colSlice.map((c, i) => (
+              <tr key={i}>
+                <td style={{ fontWeight: 600 }}>{c.name}</td>
+                <td style={{ color: 'var(--muted)' }}>{c.type}</td>
+                <td style={{ color: 'var(--muted)' }}>{c.default}</td>
+              </tr>
+            ))}
+          </DataTable>
+          <Paginator page={colPage} pages={colPages} total={columns.length} pageSize={PAGE_SIZE}
+            onPrev={() => setColPage(p => p - 1)} onNext={() => setColPage(p => p + 1)} />
+        </div>
+      )}
+
+      {/* Mutations */}
+      {mutations.length > 0 && (
+        <div>
+          <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--accent)', marginBottom: 6, fontFamily: 'var(--mono)', textTransform: 'uppercase' }}>
+            Recent Mutations
+          </div>
+          {mutations.map((m, i) => (
+            <div key={i} style={{
+              padding: '6px 10px', marginBottom: 4, borderRadius: 6, fontSize: '0.65rem',
+              fontFamily: 'var(--mono)', background: 'var(--surface)',
+              borderLeft: m.is_done ? '2px solid var(--ok)' : '2px solid var(--warn)',
+            }}>
+              <div style={{ color: 'var(--text)' }}>{m.command}</div>
+              <div style={{ color: 'var(--muted)', marginTop: 3, fontSize: '0.6rem' }}>
+                {m.create_time} · {m.is_done ? 'Done' : `${m.parts_to_do} parts left`}
+                {m.fail_reason ? ` · ${m.fail_reason}` : ''}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Create query */}
+      {info.create_query && (
+        <div>
+          <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--accent)', marginBottom: 6, fontFamily: 'var(--mono)', textTransform: 'uppercase' }}>
+            Create Query
+          </div>
+          <div style={{
+            padding: '8px 10px', borderRadius: 6, fontSize: '0.6rem', fontFamily: 'var(--mono)',
+            color: 'var(--muted)', background: 'var(--surface)', wordBreak: 'break-all',
+            maxHeight: 120, overflowY: 'auto', lineHeight: 1.5,
+          }}>{info.create_query}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Table Diagnosis Modal ────────────────────────────────────────── */
+function TableDiagModal({ open, onClose, databases }) {
+  const [dbName, setDbName] = useState('');
+  const [tableName, setTableName] = useState('');
+  const [result, setResult] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [knownTables, setKnownTables] = useState([]);
+
+  // Fetch table list when database changes
+  const handleDbChange = useCallback(async (db) => {
+    setDbName(db);
+    setTableName('');
+    setResult(null);
+    setKnownTables([]);
+    if (!db) return;
+    try {
+      const res = await fetch(`${BASE}/api/ch-tables/${encodeURIComponent(db)}`);
+      const json = await res.json();
+      setKnownTables((json.tables || []).map(t => t.name));
+    } catch (e) { /* ignore */ }
+  }, []);
+
+  function handleClose() { onClose(); setDbName(''); setTableName(''); setResult(null); setKnownTables([]); }
+
+  async function inspect() {
+    const db = dbName.trim();
+    const tbl = tableName.trim();
+    if (!db || !tbl) return;
+    setLoading(true); setResult(null);
+    try {
+      const res = await fetch(`${BASE}/api/ch-table-detail/${encodeURIComponent(db)}/${encodeURIComponent(tbl)}`);
+      setResult(await res.json());
+    } catch (e) {
+      setResult({ found: false, database: db, table: tbl, error: String(e.message) });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  if (!open) return null;
+
+  const allDbs = (databases || []).map(d => d.database);
+
+  return (
+    <Modal open={open} onClose={handleClose} title="🔍 Table Diagnosis">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div>
+            <div style={{ fontSize: '0.65rem', color: 'var(--muted)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 5 }}>
+              Database
+            </div>
+            <input
+              list="hw-db-list"
+              value={dbName}
+              onChange={e => handleDbChange(e.target.value)}
+              placeholder="Select database…"
+              style={{
+                width: '100%', padding: '8px 10px', borderRadius: 7, boxSizing: 'border-box',
+                background: 'var(--surface)', border: '1px solid var(--border)',
+                color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: '0.75rem', outline: 'none',
+              }}
+            />
+            <datalist id="hw-db-list">
+              {allDbs.map(d => <option key={d} value={d} />)}
+            </datalist>
+          </div>
+          <div>
+            <div style={{ fontSize: '0.65rem', color: 'var(--muted)', fontFamily: 'var(--mono)', textTransform: 'uppercase', letterSpacing: '0.5px', marginBottom: 5 }}>
+              Table name
+            </div>
+            <input
+              list="hw-table-list"
+              value={tableName}
+              onChange={e => { setTableName(e.target.value); setResult(null); }}
+              onKeyDown={e => e.key === 'Enter' && inspect()}
+              placeholder="Select or type table…"
+              style={{
+                width: '100%', padding: '8px 10px', borderRadius: 7, boxSizing: 'border-box',
+                background: 'var(--surface)', border: '1px solid var(--border)',
+                color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: '0.75rem', outline: 'none',
+              }}
+            />
+            <datalist id="hw-table-list">
+              {knownTables.map(t => <option key={t} value={t} />)}
+            </datalist>
+          </div>
+        </div>
+
+        <button
+          onClick={inspect}
+          disabled={loading || !dbName.trim() || !tableName.trim()}
+          style={{
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+            background: (dbName.trim() && tableName.trim()) ? 'var(--accent)' : 'rgba(0,212,170,0.2)',
+            color: 'white', border: 'none', borderRadius: 7, padding: '9px 18px',
+            cursor: (dbName.trim() && tableName.trim()) ? 'pointer' : 'default',
+            fontFamily: 'var(--mono)', fontSize: '0.75rem', fontWeight: 700,
+          }}
+        >
+          {loading ? '⏳ Fetching...' : '▶ INSPECT TABLE'}
+        </button>
+
+        {result && (
+          <div style={{
+            background: 'var(--surface)', border: '1px solid var(--border)',
+            borderRadius: 10, overflow: 'hidden',
+          }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '10px 14px', borderBottom: '1px solid var(--border)',
+              background: 'rgba(0,212,170,0.07)',
+            }}>
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '0.78rem', fontWeight: 700, color: 'var(--accent)' }}>
+                {result.database}.{result.table}
+              </span>
+              <span style={{ cursor: 'pointer', color: 'var(--muted)' }} onClick={() => setResult(null)}>✕</span>
+            </div>
+            <div style={{ padding: '12px 14px' }}>
+              <TableDetail data={result} />
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
 /* ── Main ClickHouse Panel ────────────────────────────────────────── */
-export default function ClickHousePanel({ checks }) {
+export default function ClickHousePanel({ checks, diagModalOpen, onDiagClose }) {
   const chTables = checks.__ch_tables__ || {};
 
   const unusedKafka   = chTables.unused_kafka_tables   || {};
@@ -776,6 +1088,13 @@ export default function ClickHousePanel({ checks }) {
           <div style={{ gridColumn: 'span 2' }}><ChErrors data={chErrors} /></div>
         </>)}
       </div>
+
+      {/* Table Diagnosis Modal */}
+      <TableDiagModal
+        open={diagModalOpen}
+        onClose={onDiagClose}
+        databases={checks['Total Tables']?.databases || []}
+      />
     </>
   );
 }

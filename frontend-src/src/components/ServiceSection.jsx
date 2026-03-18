@@ -30,7 +30,7 @@ export default function ServiceSection({ svcKey, meta, checks, fetchTopic, bodyP
   function renderBody() {
     switch (svcKey) {
       case 'clickhouse':
-        return <ClickHousePanel checks={checks} />;
+        return <ClickHousePanel checks={checks} diagModalOpen={diagModalOpen} onDiagClose={() => setDiagModalOpen(false)} />;
 
       case 'kafka':
         return <KafkaPanel checks={checks} fetchTopic={fetchTopic}
@@ -113,6 +113,19 @@ export default function ServiceSection({ svcKey, meta, checks, fetchTopic, bodyP
                 fontWeight:700, cursor:'pointer',
               }}
             >🔍 TOPIC DIAGNOSIS</button>
+          )}
+
+          {svcKey === 'clickhouse' && (
+            <button
+              onClick={e => { e.stopPropagation(); setDiagModalOpen(true); }}
+              style={{
+                display:'inline-flex', alignItems:'center', gap:5,
+                background:'rgba(0,212,170,0.12)', color:'var(--accent)',
+                border:'1px solid rgba(0,212,170,0.3)', borderRadius:6,
+                padding:'4px 10px', fontFamily:'var(--mono)', fontSize:'0.65rem',
+                fontWeight:700, cursor:'pointer',
+              }}
+            >🔍 TABLE DIAGNOSIS</button>
           )}
 
           <div style={{
