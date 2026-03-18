@@ -1838,6 +1838,17 @@ async def get_ch_tables(database: str):
             }
             for r in rows
         ]
+        # Fetch columns per table for schema validation
+        col_rows = ch.query(
+            "SELECT table, groupArray(name) AS cols "
+            f"FROM system.columns WHERE database = '{database}' "
+            "GROUP BY table"
+        ).result_rows
+        table_columns = {r[0]: list(r[1]) for r in col_rows}
+
+        for t in tables:
+            t["columns"] = table_columns.get(t["name"], [])
+
         # Group by engine category
         groups = {}
         for t in tables:
@@ -1857,7 +1868,37 @@ async def get_ch_tables(database: str):
             else:
                 cat = "Other"
             groups.setdefault(cat, []).append(t)
-        return {"database": database, "tables": tables, "groups": groups}
+
+        # Schema validation: check pipeline consistency
+        # Find table families (base name without _data/_kafkaenginemv/_view suffix)
+        schema_issues = []
+        data_tables = {t["name"]: set(t["columns"]) for t in groups.get("ReplicatedMergeTree", [])}
+        for base_name, data_cols in data_tables.items():
+            # Strip _data suffix to find related tables
+            stem = base_name.replace("_data", "")
+            related = {}
+            for cat in ["Kafka", "MaterializedView", "Distributed", "View"]:
+                for t in groups.get(cat, []):
+                    # Match by common stem
+                    tname = t["name"]
+                    if stem in tname or tname.startswith(stem):
+                        related[f"{cat}:{tname}"] = set(t["columns"])
+            # Compare columns
+            for label, cols in related.items():
+                missing = data_cols - cols - {"_sign", "_version"}  # ignore system cols
+                extra = cols - data_cols - {"_sign", "_version"}
+                if missing or extra:
+                    issue = {"data_table": base_name, "related": label}
+                    if missing:
+                        issue["missing_in_related"] = sorted(missing)
+                    if extra:
+                        issue["extra_in_related"] = sorted(extra)
+                    schema_issues.append(issue)
+
+        return {
+            "database": database, "tables": tables, "groups": groups,
+            "schema_issues": schema_issues,
+        }
     except Exception as e:
         logger.error(f"/api/ch-tables/{database} failed: {e}")
         return {"database": database, "tables": [], "groups": {}, "error": str(e)}

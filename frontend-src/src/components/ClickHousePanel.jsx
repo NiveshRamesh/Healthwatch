@@ -213,6 +213,9 @@ const ENGINE_META = {
   Other:               { icon: '📦', color: '100,116,139', hint: '' },
 };
 
+/* ── Engines that don't store data — hide Rows/Size ──────────────── */
+const NO_DATA_ENGINES = new Set(['Distributed', 'Kafka', 'MaterializedView', 'View']);
+
 /* ── Engine group section (collapsible table list) ───────────────── */
 function EngineGroup({ engine, tables }) {
   const [open, setOpen] = useState(false);
@@ -220,6 +223,7 @@ function EngineGroup({ engine, tables }) {
   const meta = ENGINE_META[engine] || ENGINE_META.Other;
   const pages = Math.ceil(tables.length / PAGE_SIZE);
   const slice = tables.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const showData = !NO_DATA_ENGINES.has(engine);
 
   return (
     <div style={{
@@ -257,17 +261,91 @@ function EngineGroup({ engine, tables }) {
               padding: '4px 0 8px', fontStyle: 'italic',
             }}>ℹ {meta.hint}</div>
           )}
-          <DataTable cols={['Table', 'Rows', 'Size']}>
-            {slice.map((t, i) => (
-              <tr key={i}>
-                <td style={{ fontWeight: 600 }}>{t.name}</td>
-                <td>{fmt(t.rows)}</td>
-                <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{t.size}</td>
-              </tr>
-            ))}
-          </DataTable>
+          {showData ? (
+            <DataTable cols={['Table', 'Rows', 'Size']}>
+              {slice.map((t, i) => (
+                <tr key={i}>
+                  <td style={{ fontWeight: 600 }}>{t.name}</td>
+                  <td>{fmt(t.rows)}</td>
+                  <td style={{ color: 'var(--accent)', fontWeight: 600 }}>{t.size}</td>
+                </tr>
+              ))}
+            </DataTable>
+          ) : (
+            <DataTable cols={['Table', 'Columns']}>
+              {slice.map((t, i) => (
+                <tr key={i}>
+                  <td style={{ fontWeight: 600 }}>{t.name}</td>
+                  <td style={{ color: 'var(--muted)' }}>{(t.columns || []).length} fields</td>
+                </tr>
+              ))}
+            </DataTable>
+          )}
           <Paginator page={page} pages={pages} total={tables.length} pageSize={PAGE_SIZE}
             onPrev={() => setPage(p => p - 1)} onNext={() => setPage(p => p + 1)} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Schema validation results ───────────────────────────────────── */
+function SchemaCheck({ issues }) {
+  const [open, setOpen] = useState(false);
+  if (!issues || issues.length === 0) {
+    return (
+      <div style={{
+        margin: '8px 0 4px', padding: '8px 12px', borderRadius: 8,
+        background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.15)',
+        fontSize: '0.68rem', fontFamily: 'var(--mono)', color: 'var(--ok)',
+        display: 'flex', alignItems: 'center', gap: 6,
+      }}>
+        <span>✅</span> Schema consistent — all pipeline tables have matching columns
+      </div>
+    );
+  }
+  return (
+    <div style={{
+      margin: '8px 0 4px', borderRadius: 8, overflow: 'hidden',
+      border: '1px solid rgba(245,158,11,0.2)', background: 'rgba(245,158,11,0.04)',
+    }}>
+      <div onClick={() => setOpen(o => !o)} style={{
+        padding: '8px 12px', cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '0.68rem', fontFamily: 'var(--mono)' }}>
+          <span>⚠️</span>
+          <span style={{ color: 'var(--warn)', fontWeight: 600 }}>
+            {issues.length} schema mismatch(es) found
+          </span>
+        </div>
+        <span style={{
+          color: 'var(--muted)', fontSize: '0.6rem', transition: 'transform 0.2s',
+          transform: open ? 'rotate(180deg)' : 'none',
+        }}>▼</span>
+      </div>
+      {open && (
+        <div style={{ padding: '6px 12px 10px', borderTop: '1px solid rgba(245,158,11,0.1)' }}>
+          {issues.map((iss, i) => (
+            <div key={i} style={{
+              padding: '8px 10px', marginBottom: 6, borderRadius: 6,
+              background: 'rgba(0,0,0,0.2)', fontSize: '0.62rem', fontFamily: 'var(--mono)',
+            }}>
+              <div style={{ color: 'var(--text)', fontWeight: 600, marginBottom: 4 }}>
+                {iss.data_table} → {iss.related}
+              </div>
+              {iss.missing_in_related && (
+                <div style={{ color: 'var(--error)', marginBottom: 2 }}>
+                  Missing: {iss.missing_in_related.join(', ')}
+                </div>
+              )}
+              {iss.extra_in_related && (
+                <div style={{ color: 'var(--warn)' }}>
+                  Extra: {iss.extra_in_related.join(', ')}
+                </div>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -278,17 +356,20 @@ function EngineGroup({ engine, tables }) {
 function DatabaseBreakdown({ databases }) {
   const [expandedDb, setExpandedDb] = useState(null);
   const [groups, setGroups] = useState({});
+  const [schemaIssues, setSchemaIssues] = useState([]);
   const [loading, setLoading] = useState(false);
 
   const handleClick = useCallback(async (db) => {
     if (expandedDb === db) { setExpandedDb(null); return; }
     setExpandedDb(db);
     setGroups({});
+    setSchemaIssues([]);
     setLoading(true);
     try {
       const res = await fetch(`${BASE}/api/ch-tables/${encodeURIComponent(db)}`);
       const json = await res.json();
       setGroups(json.groups || {});
+      setSchemaIssues(json.schema_issues || []);
     } catch (e) {
       console.error('fetch tables failed', e);
       setGroups({});
@@ -359,10 +440,15 @@ function DatabaseBreakdown({ databases }) {
                 Loading tables...
               </div>
             )}
-            {!loading && sortedEngines.length > 0 && sortedEngines.map(eng => (
-              <EngineGroup key={eng} engine={eng} tables={groups[eng]} />
-            ))}
-            {!loading && sortedEngines.length === 0 && !loading && (
+            {!loading && sortedEngines.length > 0 && (
+              <>
+                {sortedEngines.map(eng => (
+                  <EngineGroup key={eng} engine={eng} tables={groups[eng]} />
+                ))}
+                <SchemaCheck issues={schemaIssues} />
+              </>
+            )}
+            {!loading && sortedEngines.length === 0 && (
               <div style={{ fontSize: '0.68rem', color: 'var(--muted)', fontFamily: 'var(--mono)', padding: '8px 0' }}>
                 No tables found
               </div>
