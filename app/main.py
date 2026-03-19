@@ -1570,6 +1570,165 @@ def _fmt_ago(now, dt) -> str:
     return f"{int(secs // 86400)}d ago"
 
 
+async def check_data_retention() -> dict:
+    """
+    Data Retention Check — verifies old data is actually being removed per retention policy.
+
+    1. Reads retention config from PostgreSQL multicore.vusoft_vusoftdatamanagement
+       (Hot/Warm days). Effective retention = Warm days.
+    2. For each _data table in ClickHouse vusmart, checks min/max(timestamp) span.
+    3. If dateDiff > retention days → WARN (backend partition movement hasn't run).
+    """
+    t0 = time.time()
+    logger.info("[data_retention] START — checking actual data age vs retention policy")
+    try:
+        # ── Step 1: Get retention policy from PostgreSQL ──────────────────────
+        import asyncpg, json as _json
+
+        default_retention_days = 20  # fallback
+        custom_tables: dict = {}     # table_name -> retention_days
+        policy_source = "default"
+
+        try:
+            conn = await asyncpg.connect(
+                host=POSTGRES_HOST, port=POSTGRES_PORT,
+                user=POSTGRES_USER, password=POSTGRES_PASSWORD,
+                database="multicore", timeout=10,
+            )
+            rows = await conn.fetch(
+                "SELECT name, tables, data_category, data_retention_period, data_store_type "
+                "FROM public.vusoft_vusoftdatamanagement "
+                "WHERE tables IS NOT NULL AND data_retention_period IS NOT NULL"
+            )
+            await conn.close()
+
+            for row in rows:
+                tables_val = row["tables"]
+                category = (row["data_category"] or "").strip()
+                store_type = (row["data_store_type"] or "").strip()
+                retention_json = row["data_retention_period"]
+
+                try:
+                    rmap = _json.loads(retention_json) if isinstance(retention_json, str) else retention_json
+                    hot = int(rmap.get("Hot", 0))
+                    warm = int(rmap.get("Warm", 0))
+                    days = warm if warm > 0 else hot
+                except Exception:
+                    continue
+
+                if tables_val == "*" and category.lower() == "all" and "columnar" in store_type.lower():
+                    default_retention_days = days
+                    policy_source = "postgresql"
+                    logger.info(f"[data_retention] default retention = {days} days (Hot={hot} Warm={warm})")
+                elif category.lower() == "custom":
+                    tname = tables_val.strip() + "_data"
+                    custom_tables[tname] = days
+                    logger.info(f"[data_retention] custom table={tname} retention={days}d")
+
+            logger.info(f"[data_retention] policy from {policy_source}: "
+                        f"default={default_retention_days}d, custom={list(custom_tables.keys())}")
+        except Exception as pe:
+            logger.warning(f"[data_retention] postgres query failed, using default={default_retention_days}d: {pe}")
+
+        # ── Step 2: Get all _data tables from ClickHouse ─────────────────────
+        ch = _get_ch()
+        table_rows = ch.query(
+            "SELECT name FROM system.tables "
+            "WHERE database='vusmart' AND name LIKE '%_data' "
+            "AND engine NOT LIKE '%View%' AND engine NOT LIKE 'Distributed%'"
+        ).result_rows
+        all_data_tables = [r[0] for r in table_rows]
+        logger.info(f"[data_retention] found {len(all_data_tables)} _data tables in vusmart")
+
+        # ── Step 3: Check each table's actual data age ───────────────────────
+        results = []
+        warned = []
+
+        for table in all_data_tables:
+            retention = custom_tables.get(table, default_retention_days)
+            try:
+                row = ch.query(
+                    f"SELECT toString(min(timestamp)), toString(max(timestamp)), "
+                    f"toUInt32(dateDiff('day', min(timestamp), max(timestamp))) "
+                    f"FROM vusmart.`{table}` "
+                    f"WHERE timestamp > '1970-01-01 00:00:00'"
+                ).result_rows
+
+                if not row or not row[0][0]:
+                    continue
+
+                min_ts, max_ts, days_diff = row[0]
+                min_ts_str = str(min_ts)
+                max_ts_str = str(max_ts)
+
+                if min_ts_str.startswith("1970-01-01") or max_ts_str.startswith("1970-01-01"):
+                    continue
+
+                status = "ok"
+                if days_diff > retention:
+                    status = "warn"
+                    warned.append(table)
+                    logger.warning(f"[data_retention] WARN {table}: "
+                                   f"data_age={days_diff}d > retention={retention}d "
+                                   f"(min={min_ts_str} max={max_ts_str})")
+                else:
+                    logger.debug(f"[data_retention] OK {table}: "
+                                 f"data_age={days_diff}d retention={retention}d")
+
+                results.append({
+                    "table": table,
+                    "min_timestamp": min_ts_str,
+                    "max_timestamp": max_ts_str,
+                    "days_diff": int(days_diff),
+                    "retention_days": retention,
+                    "status": status,
+                })
+
+            except Exception as te:
+                logger.debug(f"[data_retention] skipped {table}: {te}")
+                continue
+
+        # Sort: warned first, then by days_diff desc
+        results.sort(key=lambda x: (-int(x["status"] == "warn"), -x["days_diff"]))
+
+        overall = "warn" if warned else "ok"
+        detail = (f"{len(results)} tables checked · "
+                  f"{len(warned)} exceeding {default_retention_days}d retention"
+                  if warned else
+                  f"{len(results)} tables checked · all within {default_retention_days}d retention")
+
+        logger.info(f"[data_retention] overall={overall} checked={len(results)} warned={warned}")
+        _timed("data_retention", t0)
+        return {
+            "Retention Policy": {
+                "status": "ok" if policy_source == "postgresql" else "warn",
+                "detail": f"Hot+Warm = {default_retention_days}d (source: {policy_source})"
+                          + (f", {len(custom_tables)} custom" if custom_tables else ""),
+            },
+            "Data Age Check": {
+                "status": overall,
+                "detail": detail,
+            },
+            "__retention_tables__": results,
+            "__retention_meta__": {
+                "default_retention_days": default_retention_days,
+                "custom_tables": custom_tables,
+                "total_checked": len(results),
+                "exceeded_count": len(warned),
+                "exceeded_tables": warned,
+            },
+        }
+    except Exception as e:
+        logger.error(f"[data_retention] EXCEPTION: {e}\n{traceback.format_exc()}")
+        _timed("data_retention", t0)
+        return {
+            "Retention Policy": {"status": "error", "detail": str(e)},
+            "Data Age Check": {"status": "error", "detail": str(e)},
+            "__retention_tables__": [],
+            "__retention_meta__": {},
+        }
+
+
 async def check_kubernetes_pods() -> dict:
     t0 = time.time()
     logger.info(f"[k8s_pods] START ns={K8S_NAMESPACE} prefixes={MONITORED_PODS}")
@@ -1648,6 +1807,7 @@ async def run_all_checks():
             check_pvc_and_pods(),
             check_clickhouse_tables(),
             check_kubernetes_resources(),
+            check_data_retention(),
             return_exceptions=True,
         )
         names = [
@@ -1659,6 +1819,7 @@ async def run_all_checks():
             "pvc_pods",
             "ch_tables",
             "k8s_resources",
+            "data_retention",
         ]
         for name, r in zip(names, results):
             if isinstance(r, Exception):
@@ -1682,6 +1843,7 @@ async def run_all_checks():
             pvc_pods,
             ch_tables,
             k8s_resources,
+            data_retention,
         ) = results
         ch_merged = {**safe(ch_conn, "CH Connection")}
         ch_merged["__ch_tables__"] = safe(ch_tables, "CH Tables")
@@ -1751,6 +1913,7 @@ async def run_all_checks():
                 "__resources__": safe(k8s_resources, "K8s Resources"),
             },
             "pods_pvcs": {"__pods_pvcs__": safe(pvc_pods, "Pods/PVCs")},
+            "data_retention": safe(data_retention, "Data Retention"),
         }
         last_checked = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         elapsed = round(time.time() - t0, 2)

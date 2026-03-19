@@ -7,7 +7,8 @@ export const SECTIONS_META = {
   postgres:   { label:'PostgreSQL',         sub:'App DB · Metadata Store',         icon:'🐘',  cls:'postgres'   },
   minio:      { label:'MinIO',              sub:'Object Storage · Config Store',   icon:'🪣',  cls:'minio'      },
   kubernetes: { label:'Kubernetes',         sub:'Orchestration · Node Resources',  icon:'☸️',  cls:'kubernetes' },
-  pods_pvcs:  { label:'Pods & PVCs',        sub:'Container Health · Volume Claims',icon:'📦',  cls:'pods_pvcs'  },
+  pods_pvcs:       { label:'Pods & PVCs',        sub:'Container Health · Volume Claims',icon:'📦',  cls:'pods_pvcs'       },
+  data_retention:  { label:'Data Retention',     sub:'Retention Policy · Data Age',     icon:'🗓️',  cls:'data_retention'  },
 };
 
 export const ICON_BG = {
@@ -16,7 +17,8 @@ export const ICON_BG = {
   postgres:   'rgba(51,102,204,0.12)',
   minio:      'rgba(198,53,40,0.12)',
   kubernetes: 'rgba(50,108,229,0.12)',
-  pods_pvcs:  'rgba(139,92,246,0.12)',
+  pods_pvcs:       'rgba(139,92,246,0.12)',
+  data_retention:  'rgba(234,88,12,0.12)',
 };
 
 export function sectionOverallStatus(checks) {
@@ -27,10 +29,11 @@ export function sectionOverallStatus(checks) {
     if (v && typeof v.status === 'string') all.push(v.status);
   }
   // Check nested __data__ blobs
-  const chTables   = checks.__ch_tables__;
-  const resources  = checks.__resources__;
-  const podsPvcs   = checks.__pods_pvcs__;
-  for (const blob of [chTables, resources, podsPvcs]) {
+  const chTables      = checks.__ch_tables__;
+  const resources     = checks.__resources__;
+  const podsPvcs      = checks.__pods_pvcs__;
+  const retentionMeta = checks.__retention_meta__;
+  for (const blob of [chTables, resources, podsPvcs, retentionMeta]) {
     if (blob?.status) all.push(blob.status);
   }
   if (all.includes('critical') || all.includes('error')) return 'error';
