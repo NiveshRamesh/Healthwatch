@@ -1575,18 +1575,27 @@ async def check_data_retention() -> dict:
     Data Retention Check — verifies old data is actually being removed per retention policy.
 
     1. Reads retention config from PostgreSQL multicore.vusoft_vusoftdatamanagement
-       (Hot/Warm days). Effective retention = Warm days.
+       - Effective retention = Hot + Warm days (before data moves to cold/MinIO)
+       - Tables field can be comma-separated prefixes (e.g. "vmetrics" matches all vmetrics*_data)
+       - Tracks policy name for each match
     2. For each _data table in ClickHouse vusmart, checks min/max(timestamp) span.
     3. If dateDiff > retention days → WARN (backend partition movement hasn't run).
+    4. Queries system.parts disk_name to show hot/warm tier distribution per table.
     """
     t0 = time.time()
+    HOT_DISK = os.getenv("STORAGE_HOT_DISK", "default_encrypted_disk")
+    WARM_DISK = os.getenv("STORAGE_WARM_DISK", "warm_encrypted_disk")
     logger.info("[data_retention] START — checking actual data age vs retention policy")
     try:
-        # ── Step 1: Get retention policy from PostgreSQL ──────────────────────
+        # ── Step 1: Get retention policies from PostgreSQL ────────────────────
         import asyncpg, json as _json
 
-        default_retention_days = 20  # fallback
-        custom_tables: dict = {}     # table_name -> retention_days
+        default_hot = 15
+        default_warm = 5
+        default_retention_days = 20  # fallback Hot+Warm
+        default_policy_name = "Default"
+        # Each entry: {prefixes: [str], hot: int, warm: int, total: int, name: str}
+        policies = []
         policy_source = "default"
 
         try:
@@ -1603,7 +1612,8 @@ async def check_data_retention() -> dict:
             await conn.close()
 
             for row in rows:
-                tables_val = row["tables"]
+                policy_name = (row["name"] or "").strip()
+                tables_val = (row["tables"] or "").strip()
                 category = (row["data_category"] or "").strip()
                 store_type = (row["data_store_type"] or "").strip()
                 retention_json = row["data_retention_period"]
@@ -1612,23 +1622,52 @@ async def check_data_retention() -> dict:
                     rmap = _json.loads(retention_json) if isinstance(retention_json, str) else retention_json
                     hot = int(rmap.get("Hot", 0))
                     warm = int(rmap.get("Warm", 0))
-                    days = warm if warm > 0 else hot
+                    total = hot + warm  # effective retention before cold archival
                 except Exception:
                     continue
 
-                if tables_val == "*" and category.lower() == "all" and "columnar" in store_type.lower():
-                    default_retention_days = days
+                if tables_val == "*" and category.lower() == "all":
+                    default_hot = hot
+                    default_warm = warm
+                    default_retention_days = total
+                    default_policy_name = policy_name or "Default"
                     policy_source = "postgresql"
-                    logger.info(f"[data_retention] default retention = {days} days (Hot={hot} Warm={warm})")
-                elif category.lower() == "custom":
-                    tname = tables_val.strip() + "_data"
-                    custom_tables[tname] = days
-                    logger.info(f"[data_retention] custom table={tname} retention={days}d")
+                    logger.info(f"[data_retention] default policy '{default_policy_name}': "
+                                f"Hot={hot}d + Warm={warm}d = {total}d")
+                else:
+                    # Parse comma-separated table prefixes
+                    prefixes = [p.strip() for p in tables_val.split(",") if p.strip()]
+                    policies.append({
+                        "name": policy_name,
+                        "prefixes": prefixes,
+                        "hot": hot,
+                        "warm": warm,
+                        "total": total,
+                    })
+                    logger.info(f"[data_retention] policy '{policy_name}': "
+                                f"prefixes={prefixes} Hot={hot}d + Warm={warm}d = {total}d")
 
             logger.info(f"[data_retention] policy from {policy_source}: "
-                        f"default={default_retention_days}d, custom={list(custom_tables.keys())}")
+                        f"default={default_retention_days}d, {len(policies)} custom policies")
         except Exception as pe:
             logger.warning(f"[data_retention] postgres query failed, using default={default_retention_days}d: {pe}")
+
+        # ── Helper: find matching policy for a table name ─────────────────────
+        def match_policy(table_name):
+            """Returns (retention_days, hot_days, warm_days, policy_name) for a _data table."""
+            # Strip _data suffix for prefix matching
+            base = table_name[:-5] if table_name.endswith("_data") else table_name
+            # Check custom policies (longest prefix match wins)
+            best_match = None
+            best_len = 0
+            for pol in policies:
+                for prefix in pol["prefixes"]:
+                    if base.startswith(prefix) and len(prefix) > best_len:
+                        best_match = pol
+                        best_len = len(prefix)
+            if best_match:
+                return best_match["total"], best_match["hot"], best_match["warm"], best_match["name"]
+            return default_retention_days, default_hot, default_warm, default_policy_name
 
         # ── Step 2: Get all _data tables from ClickHouse ─────────────────────
         ch = _get_ch()
@@ -1640,12 +1679,29 @@ async def check_data_retention() -> dict:
         all_data_tables = [r[0] for r in table_rows]
         logger.info(f"[data_retention] found {len(all_data_tables)} _data tables in vusmart")
 
-        # ── Step 3: Check each table's actual data age ───────────────────────
+        # ── Step 3: Get disk tier distribution per table ─────────────────────
+        tier_rows = ch.query(
+            "SELECT table, disk_name, count() as parts, "
+            "formatReadableSize(sum(bytes_on_disk)) as size, "
+            "sum(bytes_on_disk) as size_bytes "
+            "FROM system.parts "
+            "WHERE active=1 AND database='vusmart' AND name != 'all' "
+            "GROUP BY table, disk_name ORDER BY table, disk_name"
+        ).result_rows
+        # Build {table: {disk_name: {parts, size, size_bytes}}}
+        table_tiers: dict = {}
+        for r in tier_rows:
+            tbl, disk, parts, size, size_bytes = r
+            if tbl not in table_tiers:
+                table_tiers[tbl] = {}
+            table_tiers[tbl][disk] = {"parts": parts, "size": size, "size_bytes": size_bytes}
+
+        # ── Step 4: Check each table's actual data age ───────────────────────
         results = []
         warned = []
 
         for table in all_data_tables:
-            retention = custom_tables.get(table, default_retention_days)
+            retention, hot_days, warm_days, policy_name = match_policy(table)
             try:
                 row = ch.query(
                     f"SELECT toString(min(timestamp)), toString(max(timestamp)), "
@@ -1670,10 +1726,15 @@ async def check_data_retention() -> dict:
                     warned.append(table)
                     logger.warning(f"[data_retention] WARN {table}: "
                                    f"data_age={days_diff}d > retention={retention}d "
-                                   f"(min={min_ts_str} max={max_ts_str})")
+                                   f"policy='{policy_name}' (min={min_ts_str} max={max_ts_str})")
                 else:
                     logger.debug(f"[data_retention] OK {table}: "
-                                 f"data_age={days_diff}d retention={retention}d")
+                                 f"data_age={days_diff}d retention={retention}d policy='{policy_name}'")
+
+                # Tier info for this table
+                tiers = table_tiers.get(table, {})
+                hot_info = tiers.get(HOT_DISK)
+                warm_info = tiers.get(WARM_DISK)
 
                 results.append({
                     "table": table,
@@ -1681,7 +1742,12 @@ async def check_data_retention() -> dict:
                     "max_timestamp": max_ts_str,
                     "days_diff": int(days_diff),
                     "retention_days": retention,
+                    "hot_days": hot_days,
+                    "warm_days": warm_days,
+                    "policy_name": policy_name,
                     "status": status,
+                    "hot_tier": {"parts": hot_info["parts"], "size": hot_info["size"]} if hot_info else None,
+                    "warm_tier": {"parts": warm_info["parts"], "size": warm_info["size"]} if warm_info else None,
                 })
 
             except Exception as te:
@@ -1693,17 +1759,17 @@ async def check_data_retention() -> dict:
 
         overall = "warn" if warned else "ok"
         detail = (f"{len(results)} tables checked · "
-                  f"{len(warned)} exceeding {default_retention_days}d retention"
+                  f"{len(warned)} exceeding retention"
                   if warned else
-                  f"{len(results)} tables checked · all within {default_retention_days}d retention")
+                  f"{len(results)} tables checked · all within retention")
 
         logger.info(f"[data_retention] overall={overall} checked={len(results)} warned={warned}")
         _timed("data_retention", t0)
         return {
             "Retention Policy": {
                 "status": "ok" if policy_source == "postgresql" else "warn",
-                "detail": f"Hot+Warm = {default_retention_days}d (source: {policy_source})"
-                          + (f", {len(custom_tables)} custom" if custom_tables else ""),
+                "detail": (f"Default: Hot={default_hot}d + Warm={default_warm}d = {default_retention_days}d"
+                           + (f" · {len(policies)} custom" if policies else "")),
             },
             "Data Age Check": {
                 "status": overall,
@@ -1712,7 +1778,11 @@ async def check_data_retention() -> dict:
             "__retention_tables__": results,
             "__retention_meta__": {
                 "default_retention_days": default_retention_days,
-                "custom_tables": custom_tables,
+                "default_hot": default_hot,
+                "default_warm": default_warm,
+                "policies": [{"name": p["name"], "prefixes": p["prefixes"],
+                              "hot": p["hot"], "warm": p["warm"], "total": p["total"]}
+                             for p in policies],
                 "total_checked": len(results),
                 "exceeded_count": len(warned),
                 "exceeded_tables": warned,

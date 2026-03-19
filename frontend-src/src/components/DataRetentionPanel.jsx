@@ -1,8 +1,7 @@
 import React from 'react';
 import { Badge, Tip } from './Shared';
-import { fmt } from '../utils';
 
-/* ── Status strip (Retention Policy + Data Age Check) ────────────── */
+/* ── Status strip ────────────────────────────────────────────────── */
 function StatusStrip({ checks }) {
   const items = Object.entries(checks)
     .filter(([k, v]) => !k.startsWith('__') && v?.status)
@@ -30,19 +29,71 @@ function StatusStrip({ checks }) {
   );
 }
 
-/* ── Age bar — visual indicator of data age vs retention limit ───── */
-function AgeBar({ daysDiff, retentionDays }) {
-  const pct = retentionDays > 0 ? Math.min((daysDiff / retentionDays) * 100, 100) : 0;
+/* ── Age bar with hot/warm segments ──────────────────────────────── */
+function AgeBar({ daysDiff, hotDays, warmDays, retentionDays }) {
+  const total = retentionDays || 1;
+  const hotPct = Math.min((hotDays / total) * 100, 100);
+  const warmPct = Math.min((warmDays / total) * 100, 100 - hotPct);
+  const fillPct = Math.min((daysDiff / total) * 100, 100);
   const overLimit = daysDiff > retentionDays;
+
   return (
-    <div style={{ height: 6, background: 'var(--surface3)', borderRadius: 999, overflow: 'hidden', width: '100%' }}>
-      <div style={{
-        height: '100%', width: `${pct}%`, borderRadius: 999, transition: 'width 0.6s ease',
-        background: overLimit
-          ? 'linear-gradient(90deg, rgba(245,158,11,0.8), rgba(239,68,68,0.9))'
-          : 'linear-gradient(90deg, var(--accent), var(--accent2))',
-      }} />
+    <div style={{ position: 'relative' }}>
+      {/* Background track with hot/warm zones */}
+      <div style={{ height: 8, background: 'var(--surface3)', borderRadius: 999, overflow: 'hidden', width: '100%', position: 'relative' }}>
+        {/* Hot zone marker */}
+        <div style={{
+          position: 'absolute', left: 0, top: 0, bottom: 0,
+          width: `${hotPct}%`, background: 'rgba(239,147,56,0.12)',
+          borderRight: '1px dashed rgba(239,147,56,0.4)',
+        }} />
+        {/* Warm zone marker */}
+        <div style={{
+          position: 'absolute', left: `${hotPct}%`, top: 0, bottom: 0,
+          width: `${warmPct}%`, background: 'rgba(59,130,246,0.1)',
+          borderRight: '1px dashed rgba(59,130,246,0.4)',
+        }} />
+        {/* Actual fill */}
+        <div style={{
+          height: '100%', width: `${fillPct}%`, borderRadius: 999, transition: 'width 0.6s ease',
+          position: 'relative', zIndex: 1,
+          background: overLimit
+            ? 'linear-gradient(90deg, rgba(245,158,11,0.8), rgba(239,68,68,0.9))'
+            : 'linear-gradient(90deg, var(--accent), var(--accent2))',
+        }} />
+      </div>
+      {/* Labels */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
+        <span style={{ fontSize: '0.48rem', color: 'rgba(239,147,56,0.7)', fontFamily: 'var(--mono)' }}>
+          Hot {hotDays}d
+        </span>
+        <span style={{ fontSize: '0.48rem', color: 'rgba(59,130,246,0.7)', fontFamily: 'var(--mono)' }}>
+          Warm {warmDays}d
+        </span>
+      </div>
     </div>
+  );
+}
+
+/* ── Tier pill — shows data on a disk tier ───────────────────────── */
+function TierPill({ label, info, color }) {
+  if (!info) return (
+    <span style={{
+      padding: '2px 6px', borderRadius: 4, fontSize: '0.52rem', fontWeight: 600,
+      fontFamily: 'var(--mono)', background: 'var(--surface3)', color: 'var(--muted)',
+      border: '1px solid var(--border)',
+    }}>
+      {label}: empty
+    </span>
+  );
+  return (
+    <span style={{
+      padding: '2px 6px', borderRadius: 4, fontSize: '0.52rem', fontWeight: 600,
+      fontFamily: 'var(--mono)', background: `rgba(${color},0.1)`, color: `rgb(${color})`,
+      border: `1px solid rgba(${color},0.3)`,
+    }}>
+      {label}: {info.parts}p · {info.size}
+    </span>
   );
 }
 
@@ -58,7 +109,7 @@ function RetentionCard({ table }) {
       border: overLimit ? '1px solid rgba(245,158,11,0.35)' : '1px solid var(--border)',
       borderRadius: 10,
       padding: '14px 16px',
-      display: 'flex', flexDirection: 'column', gap: 10,
+      display: 'flex', flexDirection: 'column', gap: 8,
       transition: 'border-color 0.2s, background 0.2s',
     }}
       onMouseEnter={e => { e.currentTarget.style.borderColor = 'rgba(0,212,170,0.3)'; e.currentTarget.style.background = 'var(--surface3)'; }}
@@ -66,48 +117,68 @@ function RetentionCard({ table }) {
     >
       {/* Header: table name + status */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-        <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text)', fontFamily: 'var(--mono)',
+        <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text)', fontFamily: 'var(--mono)',
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
         }} title={t.table}>
           {t.table}
         </span>
         {overLimit ? (
           <span style={{
-            padding: '2px 8px', borderRadius: 4, fontSize: '0.56rem', fontWeight: 700,
+            padding: '2px 8px', borderRadius: 4, fontSize: '0.54rem', fontWeight: 700,
             background: 'rgba(245,158,11,0.15)', color: 'var(--warn)',
             border: '1px solid rgba(245,158,11,0.3)', letterSpacing: '0.5px', flexShrink: 0, marginLeft: 8,
           }}>EXCEEDED +{overBy}d</span>
         ) : (
           <span style={{
-            padding: '2px 8px', borderRadius: 4, fontSize: '0.56rem', fontWeight: 600,
+            padding: '2px 8px', borderRadius: 4, fontSize: '0.54rem', fontWeight: 600,
             background: 'rgba(16,185,129,0.1)', color: 'var(--ok)', letterSpacing: '0.5px', flexShrink: 0, marginLeft: 8,
           }}>OK</span>
         )}
       </div>
 
+      {/* Policy name badge */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{
+          padding: '2px 7px', borderRadius: 4, fontSize: '0.52rem', fontWeight: 600,
+          fontFamily: 'var(--mono)', background: 'rgba(139,92,246,0.12)', color: 'rgb(139,92,246)',
+          border: '1px solid rgba(139,92,246,0.3)', letterSpacing: '0.3px',
+        }}>
+          {t.policy_name}
+        </span>
+        <span style={{ fontSize: '0.52rem', color: 'var(--muted)', fontFamily: 'var(--mono)' }}>
+          Hot={t.hot_days}d + Warm={t.warm_days}d = {t.retention_days}d
+        </span>
+      </div>
+
       {/* Age bar */}
-      <AgeBar daysDiff={t.days_diff} retentionDays={t.retention_days} />
+      <AgeBar daysDiff={t.days_diff} hotDays={t.hot_days} warmDays={t.warm_days} retentionDays={t.retention_days} />
 
       {/* Stats row */}
       <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <span style={{ fontSize: '0.56rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>Data Span</span>
+          <span style={{ fontSize: '0.54rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>Data Span</span>
           <span style={{ fontSize: '0.82rem', fontWeight: 700, color: overLimit ? 'var(--warn)' : 'var(--accent)', fontFamily: 'var(--mono)' }}>
             {t.days_diff}d
           </span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <span style={{ fontSize: '0.56rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>Retention</span>
+          <span style={{ fontSize: '0.54rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>Retention</span>
           <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text)', fontFamily: 'var(--mono)' }}>
             {t.retention_days}d
           </span>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginLeft: 'auto', textAlign: 'right' }}>
-          <span style={{ fontSize: '0.56rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>Oldest Data</span>
-          <span style={{ fontSize: '0.68rem', fontWeight: 400, color: 'var(--muted)', fontFamily: 'var(--mono)' }}>
+          <span style={{ fontSize: '0.54rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>Oldest Data</span>
+          <span style={{ fontSize: '0.65rem', fontWeight: 400, color: 'var(--muted)', fontFamily: 'var(--mono)' }}>
             {t.min_timestamp ? t.min_timestamp.split('.')[0] : 'N/A'}
           </span>
         </div>
+      </div>
+
+      {/* Disk tier distribution */}
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', borderTop: '1px solid var(--border)', paddingTop: 7 }}>
+        <TierPill label="HOT" info={t.hot_tier} color="239,147,56" />
+        <TierPill label="WARM" info={t.warm_tier} color="59,130,246" />
       </div>
     </div>
   );
@@ -123,6 +194,35 @@ export default function DataRetentionPanel({ checks }) {
   return (
     <>
       <StatusStrip checks={checks} />
+
+      {/* Policy summary */}
+      {meta.policies && meta.policies.length > 0 && (
+        <div style={{ padding: '4px 20px 8px', borderTop: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text)' }}>Policies</span>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {/* Default policy */}
+            <span style={{
+              padding: '4px 10px', borderRadius: 6, fontSize: '0.62rem', fontWeight: 600,
+              fontFamily: 'var(--mono)', background: 'rgba(16,185,129,0.08)',
+              border: '1px solid rgba(16,185,129,0.2)', color: 'var(--ok)',
+            }}>
+              Default: Hot={meta.default_hot}d + Warm={meta.default_warm}d = {meta.default_retention_days}d
+            </span>
+            {/* Custom policies */}
+            {meta.policies.map((p, i) => (
+              <span key={i} style={{
+                padding: '4px 10px', borderRadius: 6, fontSize: '0.62rem', fontWeight: 600,
+                fontFamily: 'var(--mono)', background: 'rgba(139,92,246,0.08)',
+                border: '1px solid rgba(139,92,246,0.2)', color: 'rgb(139,92,246)',
+              }}>
+                {p.name}: {p.prefixes.join(', ')} = {p.total}d
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       {tables.length > 0 && (
         <>
@@ -145,7 +245,7 @@ export default function DataRetentionPanel({ checks }) {
               </div>
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
                 gap: 10, padding: '10px 20px 16px',
               }}>
                 {exceeded.map(t => <RetentionCard key={t.table} table={t} />)}
@@ -172,7 +272,7 @@ export default function DataRetentionPanel({ checks }) {
               </div>
               <div style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
                 gap: 10, padding: '10px 20px 16px',
               }}>
                 {healthy.map(t => <RetentionCard key={t.table} table={t} />)}
