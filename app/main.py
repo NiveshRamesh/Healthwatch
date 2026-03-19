@@ -67,6 +67,11 @@ MINIO_ENDPOINT = os.getenv(
 MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "")
 MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
+
+# Pod prefix aliases — map logical names to actual pod name prefixes
+POD_PREFIX_ALIASES: dict = {
+    "broker": "kafka-cluster-cp-kafka",
+}
 ZK_POD_NAME = os.getenv("ZK_POD_NAME", "kafka-cluster-cp-zookeeper-0")
 ZK_PORT = int(os.getenv("ZK_PORT", "2181"))
 ZK_OUTSTANDING_WARN = int(os.getenv("ZK_OUTSTANDING_WARN", "10"))
@@ -592,11 +597,7 @@ async def check_pvc_and_pods() -> dict:
                 logger.warning(
                     f"[pods_pvcs] pod={pod.metadata.name} c={c.name} state={state}"
                 )
-            if not cpu_lim or not mem_lim:
-                alerts.append(f"! {c.name}: missing resource limits")
-                logger.warning(
-                    f"[pods_pvcs] pod={pod.metadata.name} c={c.name} missing limits"
-                )
+            # Missing limits are expected for some containers — do not alert
             containers.append(
                 {
                     "name": c.name,
@@ -615,7 +616,7 @@ async def check_pvc_and_pods() -> dict:
             else (
                 "warn"
                 if any("restarts" in a or "state=" in a for a in alerts)
-                else ("warn" if any("missing resource" in a for a in alerts) else "ok")
+                else "ok"
             )
         )
         if phase not in ("Running", "Succeeded"):
@@ -1578,12 +1579,13 @@ async def check_kubernetes_pods() -> dict:
         all_nodes = core.list_node().items
         logger.info(f"[k8s_pods] {len(all_pods)} pods, {len(all_nodes)} nodes")
         checks = {}
-        for prefix in MONITORED_PODS:
-            prefix = prefix.strip()
+        for raw_prefix in MONITORED_PODS:
+            raw_prefix = raw_prefix.strip()
+            prefix = POD_PREFIX_ALIASES.get(raw_prefix, raw_prefix)
             matched = [p for p in all_pods if p.metadata.name.startswith(prefix)]
             if not matched:
-                logger.warning(f"[k8s_pods] no pod for prefix={prefix!r}")
-                checks[f"Pod: {prefix.capitalize()}"] = {
+                logger.warning(f"[k8s_pods] no pod for prefix={prefix!r} (raw={raw_prefix!r})")
+                checks[f"Pod: {raw_prefix.capitalize()}"] = {
                     "status": "warn",
                     "detail": f"No pod matching '{prefix}'",
                 }
@@ -1599,9 +1601,9 @@ async def check_kubernetes_pods() -> dict:
                 s = "warn"
             detail = f"{matched[0].metadata.name} — {matched[0].status.phase}, {restarts} restarts"
             logger.info(
-                f"[k8s_pods] prefix={prefix!r} running={len(running)}/{len(matched)} restarts={restarts} -> {s}"
+                f"[k8s_pods] prefix={prefix!r} (raw={raw_prefix!r}) running={len(running)}/{len(matched)} restarts={restarts} -> {s}"
             )
-            checks[f"Pod: {prefix.capitalize()}"] = {"status": s, "detail": detail}
+            checks[f"Pod: {raw_prefix.capitalize()}"] = {"status": s, "detail": detail}
         rn = sum(
             1
             for n in all_nodes

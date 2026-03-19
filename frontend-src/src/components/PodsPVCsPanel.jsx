@@ -6,7 +6,6 @@ function PodRow({ pod }) {
   const [open, setOpen] = useState(false);
   const { name, phase, containers, alerts, status } = pod;
   const totalRestarts = containers.reduce((s, c) => s + (c.restarts || 0), 0);
-  const missingLimits = containers.some(c => !c.cpu_limit || !c.mem_limit);
   const nonRunning    = containers.some(c => c.state !== 'running');
 
   return (
@@ -36,11 +35,6 @@ function PodRow({ pod }) {
               <span style={{ fontFamily:'var(--mono)', fontSize:'0.58rem', color:'var(--warn)',
                 background:'rgba(245,158,11,0.1)', border:'1px solid rgba(245,158,11,0.3)',
                 borderRadius:3, padding:'1px 5px' }}>↺ {totalRestarts}</span>
-            )}
-            {missingLimits && (
-              <span style={{ fontFamily:'var(--mono)', fontSize:'0.58rem', color:'var(--warn)',
-                background:'rgba(245,158,11,0.1)', border:'1px solid rgba(245,158,11,0.3)',
-                borderRadius:3, padding:'1px 5px' }}>⚠ no limits</span>
             )}
             {nonRunning && (
               <span style={{ fontFamily:'var(--mono)', fontSize:'0.58rem', color:'var(--error)',
@@ -72,8 +66,8 @@ function PodRow({ pod }) {
               <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:4 }}>
                 {[
                   ['Restarts', c.restarts,         c.restarts > 10  ? 'var(--warn)'  : 'var(--muted)'],
-                  ['CPU Lim',  c.cpu_limit || '⚠', !c.cpu_limit     ? 'var(--warn)'  : 'var(--text)'],
-                  ['Mem Lim',  c.mem_limit || '⚠', !c.mem_limit     ? 'var(--warn)'  : 'var(--text)'],
+                  ['CPU Lim',  c.cpu_limit || '—', 'var(--muted)'],
+                  ['Mem Lim',  c.mem_limit || '—', 'var(--muted)'],
                   ['CPU Req',  c.cpu_req   || '—', 'var(--muted)'],
                 ].map(([lbl, val, color]) => (
                   <div key={lbl}>
