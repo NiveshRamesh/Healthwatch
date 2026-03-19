@@ -5,6 +5,7 @@ import ClickHousePanel from './ClickHousePanel';
 import KafkaPanel from './KafkaPanel';
 import KubernetesPanel from './KubernetesPanel';
 import PodsPVCsPanel from './PodsPVCsPanel';
+import MinIOPanel from './MinIOPanel';
 import CheckRow from './CheckRow';
 
 const STATUS_RGB = { ok: '16,185,129', warn: '245,158,11', error: '239,68,68' };
@@ -33,6 +34,8 @@ export default function ServiceDetailPage({ svcKey, meta, checks, fetchTopic, di
         return <KubernetesPanel checks={checks} />;
       case 'pods_pvcs':
         return <PodsPVCsPanel data={checks.__pods_pvcs__} />;
+      case 'minio':
+        return <MinIOPanel checks={checks} />;
       default:
         return (
           <>
