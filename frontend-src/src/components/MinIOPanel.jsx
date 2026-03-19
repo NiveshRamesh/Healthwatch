@@ -43,9 +43,17 @@ function SizeBar({ bytes, maxBytes }) {
   );
 }
 
+/* ── Change badge styles ──────────────────────────────────────────── */
+const CHANGE_STYLES = {
+  added:    { icon: '＋', bg: 'rgba(16,185,129,0.12)', color: 'var(--ok)',   border: 'rgba(16,185,129,0.3)' },
+  deleted:  { icon: '−',  bg: 'rgba(239,68,68,0.12)',  color: 'var(--error)', border: 'rgba(239,68,68,0.3)' },
+  modified: { icon: '~',  bg: 'rgba(245,158,11,0.12)', color: 'var(--warn)',  border: 'rgba(245,158,11,0.3)' },
+};
+
 /* ── Bucket Card ─────────────────────────────────────────────────── */
 function BucketCard({ bucket, maxBytes }) {
   const b = bucket;
+  const changes = b.changes || [];
   const modifiedColor = b.recently_modified ? 'var(--warn)' : 'var(--muted)';
 
   return (
@@ -106,6 +114,34 @@ function BucketCard({ bucket, maxBytes }) {
           </span>
         </div>
       </div>
+
+      {/* Change indicators — shown when objects are added/deleted/modified since last check */}
+      {changes.length > 0 && (
+        <div style={{
+          borderTop: '1px solid var(--border)', paddingTop: 8,
+          display: 'flex', flexDirection: 'column', gap: 5,
+        }}>
+          <span style={{ fontSize: '0.56rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>
+            Changes since last check
+          </span>
+          {changes.map((c, i) => {
+            const s = CHANGE_STYLES[c.type] || CHANGE_STYLES.modified;
+            return (
+              <div key={i} style={{
+                display: 'flex', alignItems: 'center', gap: 8,
+                padding: '4px 8px', borderRadius: 6,
+                background: s.bg, border: `1px solid ${s.border}`,
+              }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 700, color: s.color, fontFamily: 'var(--mono)', lineHeight: 1 }}>{s.icon}</span>
+                <span style={{ fontSize: '0.68rem', fontWeight: 600, color: s.color, fontFamily: 'var(--mono)' }}>{c.label}</span>
+                {c.detail && (
+                  <span style={{ fontSize: '0.6rem', color: 'var(--muted)', fontFamily: 'var(--mono)', marginLeft: 'auto' }}>{c.detail}</span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

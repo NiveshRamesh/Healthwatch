@@ -76,6 +76,7 @@ last_result: dict = {}
 last_checked: str = ""
 is_running: bool = False
 check_durations: dict = {}
+_prev_minio_snapshot: dict = {}  # bucket_name -> {object_count, total_size}
 
 # ─── K8s + CH helpers ────────────────────────────────────────────────────────
 _k8s_core = None
@@ -1473,6 +1474,33 @@ async def check_minio() -> dict:
                     f"[minio] bucket={b.name} objects={bucket_info['object_count']} "
                     f"size={bucket_info['total_size_human']} last_mod={bucket_info.get('last_modified_ago', 'N/A')}"
                 )
+
+            # ── Compare with previous snapshot to detect changes ──
+            global _prev_minio_snapshot
+            current_snapshot = {}
+            for bd in buckets_data:
+                name = bd["name"]
+                cur_objs = bd["object_count"]
+                cur_size = bd["total_size"]
+                current_snapshot[name] = {"object_count": cur_objs, "total_size": cur_size}
+
+                prev = _prev_minio_snapshot.get(name)
+                if prev is not None:
+                    obj_delta = cur_objs - prev["object_count"]
+                    size_delta = cur_size - prev["total_size"]
+                    changes = []
+                    if obj_delta > 0:
+                        changes.append({"type": "added", "label": f"+{obj_delta} object(s)", "detail": f"Size change: +{_fmt_bytes(size_delta)}" if size_delta > 0 else None})
+                    elif obj_delta < 0:
+                        changes.append({"type": "deleted", "label": f"{obj_delta} object(s)", "detail": f"Size change: {_fmt_bytes(size_delta)}" if size_delta < 0 else None})
+                    if obj_delta == 0 and size_delta != 0:
+                        direction = "+" if size_delta > 0 else "-"
+                        changes.append({"type": "modified", "label": f"Size {direction}{_fmt_bytes(abs(size_delta))}", "detail": "Objects unchanged, content modified"})
+                    bd["changes"] = changes
+                else:
+                    bd["changes"] = []  # first run, no comparison available
+
+            _prev_minio_snapshot = current_snapshot
 
             total_size = sum(b["total_size"] for b in buckets_data)
             recently_mod = [b["name"] for b in buckets_data if b["recently_modified"]]
