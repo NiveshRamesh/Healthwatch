@@ -9,6 +9,7 @@ export const SECTIONS_META = {
   kubernetes: { label:'Kubernetes',         sub:'Orchestration · Node Resources',  icon:'☸️',  cls:'kubernetes' },
   pods_pvcs:       { label:'Pods & PVCs',        sub:'Container Health · Volume Claims',icon:'📦',  cls:'pods_pvcs'       },
   data_retention:  { label:'Data Retention',     sub:'Retention Policy · Data Age',     icon:'🗓️',  cls:'data_retention'  },
+  cert_health:     { label:'Cert Health',        sub:'K8s Certificates · Renewal',      icon:'🔐',  cls:'cert_health'     },
 };
 
 export const ICON_BG = {
@@ -19,6 +20,7 @@ export const ICON_BG = {
   kubernetes: 'rgba(50,108,229,0.12)',
   pods_pvcs:       'rgba(139,92,246,0.12)',
   data_retention:  'rgba(234,88,12,0.12)',
+  cert_health:     'rgba(220,38,38,0.12)',
 };
 
 export function sectionOverallStatus(checks) {
