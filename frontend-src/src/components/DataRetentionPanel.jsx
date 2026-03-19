@@ -65,10 +65,10 @@ function AgeBar({ daysDiff, hotDays, warmDays, retentionDays }) {
       {/* Labels */}
       <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 3 }}>
         <span style={{ fontSize: '0.48rem', color: 'rgba(239,147,56,0.7)', fontFamily: 'var(--mono)' }}>
-          Hot {hotDays}d
+          Hot 0-{hotDays}d
         </span>
         <span style={{ fontSize: '0.48rem', color: 'rgba(59,130,246,0.7)', fontFamily: 'var(--mono)' }}>
-          Warm {warmDays}d
+          Warm {hotDays}-{warmDays}d
         </span>
       </div>
     </div>
@@ -92,7 +92,7 @@ function TierPill({ label, info, color }) {
       fontFamily: 'var(--mono)', background: `rgba(${color},0.1)`, color: `rgb(${color})`,
       border: `1px solid rgba(${color},0.3)`,
     }}>
-      {label}: {info.parts}p · {info.size}
+      {label}: {info.size}
     </span>
   );
 }
@@ -146,7 +146,7 @@ function RetentionCard({ table }) {
           {t.policy_name}
         </span>
         <span style={{ fontSize: '0.52rem', color: 'var(--muted)', fontFamily: 'var(--mono)' }}>
-          Hot={t.hot_days}d + Warm={t.warm_days}d = {t.retention_days}d
+          {t.retention_days}d in CH (Hot={t.hot_days}d, Warm={t.warm_days - t.hot_days}d)
         </span>
       </div>
 
@@ -208,7 +208,7 @@ export default function DataRetentionPanel({ checks }) {
               fontFamily: 'var(--mono)', background: 'rgba(16,185,129,0.08)',
               border: '1px solid rgba(16,185,129,0.2)', color: 'var(--ok)',
             }}>
-              Default: Hot={meta.default_hot}d + Warm={meta.default_warm}d = {meta.default_retention_days}d
+              Default: {meta.default_retention_days}d in CH (Hot={meta.default_hot}d, Warm={meta.default_warm - meta.default_hot}d)
             </span>
             {/* Custom policies */}
             {meta.policies.map((p, i) => (
@@ -217,7 +217,7 @@ export default function DataRetentionPanel({ checks }) {
                 fontFamily: 'var(--mono)', background: 'rgba(139,92,246,0.08)',
                 border: '1px solid rgba(139,92,246,0.2)', color: 'rgb(139,92,246)',
               }}>
-                {p.name}: {p.prefixes.join(', ')} = {p.total}d
+                {p.name}: {p.prefixes.join(', ')} → {p.total}d in CH
               </span>
             ))}
           </div>

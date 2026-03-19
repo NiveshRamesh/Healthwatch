@@ -1574,13 +1574,17 @@ async def check_data_retention() -> dict:
     """
     Data Retention Check — verifies old data is actually being removed per retention policy.
 
+    DB stores: Hot=N (days on hot disk), Warm=M (CUMULATIVE — includes Hot).
+    So Warm is the total ClickHouse retention. Archive/Cold is MinIO only.
+    Example: UI Hot=1, Warm=1 → DB stores Hot=1, Warm=2 → CH retention = 2 days.
+
     1. Reads retention config from PostgreSQL multicore.vusoft_vusoftdatamanagement
-       - Effective retention = Hot + Warm days (before data moves to cold/MinIO)
+       - Effective ClickHouse retention = Warm value (cumulative, already includes Hot)
        - Tables field can be comma-separated prefixes (e.g. "vmetrics" matches all vmetrics*_data)
        - Tracks policy name for each match
     2. For each _data table in ClickHouse vusmart, checks min/max(timestamp) span.
-    3. If dateDiff > retention days → WARN (backend partition movement hasn't run).
-    4. Queries system.parts disk_name to show hot/warm tier distribution per table.
+    3. If dateDiff > Warm days → WARN (data should have been moved to cold).
+    4. Queries system.parts disk_name to show hot/warm tier size per table.
     """
     t0 = time.time()
     HOT_DISK = os.getenv("STORAGE_HOT_DISK", "default_encrypted_disk")
@@ -1591,8 +1595,8 @@ async def check_data_retention() -> dict:
         import asyncpg, json as _json
 
         default_hot = 15
-        default_warm = 5
-        default_retention_days = 20  # fallback Hot+Warm
+        default_warm = 20  # DB Warm is cumulative (includes Hot)
+        default_retention_days = 20  # = Warm (total CH retention)
         default_policy_name = "Default"
         # Each entry: {prefixes: [str], hot: int, warm: int, total: int, name: str}
         policies = []
@@ -1621,8 +1625,10 @@ async def check_data_retention() -> dict:
                 try:
                     rmap = _json.loads(retention_json) if isinstance(retention_json, str) else retention_json
                     hot = int(rmap.get("Hot", 0))
-                    warm = int(rmap.get("Warm", 0))
-                    total = hot + warm  # effective retention before cold archival
+                    warm = int(rmap.get("Warm", 0))  # cumulative — includes Hot
+                    # Warm is the total CH retention (data removed from CH after Warm days)
+                    # warm_only = time spent on warm disk = Warm - Hot
+                    total = warm  # effective ClickHouse retention
                 except Exception:
                     continue
 
@@ -1633,7 +1639,7 @@ async def check_data_retention() -> dict:
                     default_policy_name = policy_name or "Default"
                     policy_source = "postgresql"
                     logger.info(f"[data_retention] default policy '{default_policy_name}': "
-                                f"Hot={hot}d + Warm={warm}d = {total}d")
+                                f"Hot={hot}d Warm={warm}d (cumulative) → CH retention={total}d")
                 else:
                     # Parse comma-separated table prefixes
                     prefixes = [p.strip() for p in tables_val.split(",") if p.strip()]
@@ -1645,7 +1651,7 @@ async def check_data_retention() -> dict:
                         "total": total,
                     })
                     logger.info(f"[data_retention] policy '{policy_name}': "
-                                f"prefixes={prefixes} Hot={hot}d + Warm={warm}d = {total}d")
+                                f"prefixes={prefixes} Hot={hot}d Warm={warm}d → CH retention={total}d")
 
             logger.info(f"[data_retention] policy from {policy_source}: "
                         f"default={default_retention_days}d, {len(policies)} custom policies")
@@ -1746,8 +1752,8 @@ async def check_data_retention() -> dict:
                     "warm_days": warm_days,
                     "policy_name": policy_name,
                     "status": status,
-                    "hot_tier": {"parts": hot_info["parts"], "size": hot_info["size"]} if hot_info else None,
-                    "warm_tier": {"parts": warm_info["parts"], "size": warm_info["size"]} if warm_info else None,
+                    "hot_tier": {"size": hot_info["size"], "size_bytes": hot_info["size_bytes"]} if hot_info else None,
+                    "warm_tier": {"size": warm_info["size"], "size_bytes": warm_info["size_bytes"]} if warm_info else None,
                 })
 
             except Exception as te:
@@ -1768,7 +1774,7 @@ async def check_data_retention() -> dict:
         return {
             "Retention Policy": {
                 "status": "ok" if policy_source == "postgresql" else "warn",
-                "detail": (f"Default: Hot={default_hot}d + Warm={default_warm}d = {default_retention_days}d"
+                "detail": (f"Default: {default_retention_days}d in CH (Hot={default_hot}d, Warm={default_warm - default_hot}d)"
                            + (f" · {len(policies)} custom" if policies else "")),
             },
             "Data Age Check": {
