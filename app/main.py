@@ -56,11 +56,11 @@ MONITORED_PODS = os.getenv(
     "MONITORED_PODS",
     "denver,nairobi,broker,kafka-cluster-cp-zookeeper,chi-clickhouse,postgresql,minio-tenant,keycloak,traefik",
 ).split(",")
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "timescaledb.vsmaps.svc.cluster.local")
+POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgresql.vsmaps.svc.cluster.local")
 POSTGRES_PORT = int(os.getenv("POSTGRES_PORT", "5432"))
-POSTGRES_USER = os.getenv("POSTGRES_USER", "postgres")
+POSTGRES_USER = os.getenv("POSTGRES_USER", "core")
 POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "")
-POSTGRES_DB = os.getenv("POSTGRES_DB", "postgres")
+POSTGRES_DB = os.getenv("POSTGRES_DB", "multicore")
 MINIO_ENDPOINT = os.getenv(
     "MINIO_ENDPOINT", "http://minio-tenant.vsmaps.svc.cluster.local:9000"
 )
