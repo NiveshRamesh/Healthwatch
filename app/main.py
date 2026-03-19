@@ -76,7 +76,7 @@ last_result: dict = {}
 last_checked: str = ""
 is_running: bool = False
 check_durations: dict = {}
-_prev_minio_snapshot: dict = {}  # bucket_name -> {object_count, total_size}
+_prev_minio_snapshot: dict = {}  # bucket_name -> {objects: {name: {size, last_modified}}, ...}
 
 # ─── K8s + CH helpers ────────────────────────────────────────────────────────
 _k8s_core = None
@@ -1449,9 +1449,15 @@ async def check_minio() -> dict:
                     total_bytes = 0
                     obj_count = 0
                     latest_mod = None
+                    obj_map = {}  # object_name -> {size, last_modified}
                     for obj in client.list_objects(b.name, recursive=True):
-                        total_bytes += obj.size or 0
+                        sz = obj.size or 0
+                        total_bytes += sz
                         obj_count += 1
+                        obj_map[obj.object_name] = {
+                            "size": sz,
+                            "last_modified": obj.last_modified.isoformat() if obj.last_modified else None,
+                        }
                         if obj.last_modified:
                             mod = obj.last_modified
                             if latest_mod is None or mod > latest_mod:
@@ -1460,6 +1466,7 @@ async def check_minio() -> dict:
                     bucket_info["total_size"] = total_bytes
                     bucket_info["total_size_human"] = _fmt_bytes(total_bytes)
                     bucket_info["object_count"] = obj_count
+                    bucket_info["_obj_map"] = obj_map  # used for diff, stripped before response
                     if latest_mod:
                         bucket_info["last_modified"] = latest_mod.isoformat()
                         hours_ago = (now - latest_mod).total_seconds() / 3600
@@ -1475,30 +1482,42 @@ async def check_minio() -> dict:
                     f"size={bucket_info['total_size_human']} last_mod={bucket_info.get('last_modified_ago', 'N/A')}"
                 )
 
-            # ── Compare with previous snapshot to detect changes ──
+            # ── Compare with previous snapshot to detect per-file changes ──
             global _prev_minio_snapshot
             current_snapshot = {}
             for bd in buckets_data:
                 name = bd["name"]
-                cur_objs = bd["object_count"]
-                cur_size = bd["total_size"]
-                current_snapshot[name] = {"object_count": cur_objs, "total_size": cur_size}
+                cur_objs = bd.get("_obj_map", {})
+                current_snapshot[name] = cur_objs
 
-                prev = _prev_minio_snapshot.get(name)
-                if prev is not None:
-                    obj_delta = cur_objs - prev["object_count"]
-                    size_delta = cur_size - prev["total_size"]
-                    changes = []
-                    if obj_delta > 0:
-                        changes.append({"type": "added", "label": f"+{obj_delta} object(s)", "detail": f"Size change: +{_fmt_bytes(size_delta)}" if size_delta > 0 else None})
-                    elif obj_delta < 0:
-                        changes.append({"type": "deleted", "label": f"{obj_delta} object(s)", "detail": f"Size change: {_fmt_bytes(size_delta)}" if size_delta < 0 else None})
-                    if obj_delta == 0 and size_delta != 0:
-                        direction = "+" if size_delta > 0 else "-"
-                        changes.append({"type": "modified", "label": f"Size {direction}{_fmt_bytes(abs(size_delta))}", "detail": "Objects unchanged, content modified"})
-                    bd["changes"] = changes
-                else:
-                    bd["changes"] = []  # first run, no comparison available
+                prev_objs = _prev_minio_snapshot.get(name)
+                changes = []
+                if prev_objs is not None:
+                    cur_keys = set(cur_objs.keys())
+                    prev_keys = set(prev_objs.keys())
+
+                    # New files
+                    for fname in sorted(cur_keys - prev_keys):
+                        sz = cur_objs[fname]["size"]
+                        changes.append({"type": "added", "label": fname, "detail": _fmt_bytes(sz)})
+
+                    # Deleted files
+                    for fname in sorted(prev_keys - cur_keys):
+                        sz = prev_objs[fname]["size"]
+                        changes.append({"type": "deleted", "label": fname, "detail": _fmt_bytes(sz)})
+
+                    # Modified files (same name, different size)
+                    for fname in sorted(cur_keys & prev_keys):
+                        cur_sz = cur_objs[fname]["size"]
+                        prev_sz = prev_objs[fname]["size"]
+                        if cur_sz != prev_sz:
+                            delta = cur_sz - prev_sz
+                            sign = "+" if delta > 0 else ""
+                            changes.append({"type": "modified", "label": fname, "detail": f"{sign}{_fmt_bytes(abs(delta))}"})
+
+                bd["changes"] = changes
+                # Remove internal obj_map before sending to frontend
+                bd.pop("_obj_map", None)
 
             _prev_minio_snapshot = current_snapshot
 

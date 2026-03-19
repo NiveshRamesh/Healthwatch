@@ -115,31 +115,41 @@ function BucketCard({ bucket, maxBytes }) {
         </div>
       </div>
 
-      {/* Change indicators — shown when objects are added/deleted/modified since last check */}
+      {/* Change indicators — file-level: added/deleted/modified since last check */}
       {changes.length > 0 && (
         <div style={{
           borderTop: '1px solid var(--border)', paddingTop: 8,
           display: 'flex', flexDirection: 'column', gap: 5,
         }}>
           <span style={{ fontSize: '0.56rem', color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.8px', fontWeight: 600 }}>
-            Changes since last check
+            Changes since last check ({changes.length})
           </span>
-          {changes.map((c, i) => {
-            const s = CHANGE_STYLES[c.type] || CHANGE_STYLES.modified;
-            return (
-              <div key={i} style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                padding: '4px 8px', borderRadius: 6,
-                background: s.bg, border: `1px solid ${s.border}`,
-              }}>
-                <span style={{ fontSize: '0.75rem', fontWeight: 700, color: s.color, fontFamily: 'var(--mono)', lineHeight: 1 }}>{s.icon}</span>
-                <span style={{ fontSize: '0.68rem', fontWeight: 600, color: s.color, fontFamily: 'var(--mono)' }}>{c.label}</span>
-                {c.detail && (
-                  <span style={{ fontSize: '0.6rem', color: 'var(--muted)', fontFamily: 'var(--mono)', marginLeft: 'auto' }}>{c.detail}</span>
-                )}
-              </div>
-            );
-          })}
+          <div style={{ maxHeight: 120, overflowY: 'auto' }}>
+            {changes.map((c, i) => {
+              const s = CHANGE_STYLES[c.type] || CHANGE_STYLES.modified;
+              const typeLabel = c.type === 'added' ? 'NEW' : c.type === 'deleted' ? 'DEL' : 'MOD';
+              return (
+                <div key={i} style={{
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  padding: '3px 8px', borderRadius: 5, marginBottom: 3,
+                  background: s.bg, border: `1px solid ${s.border}`,
+                }}>
+                  <span style={{
+                    fontSize: '0.52rem', fontWeight: 700, color: s.color, fontFamily: 'var(--mono)',
+                    padding: '1px 4px', borderRadius: 3, background: 'rgba(0,0,0,0.2)',
+                    letterSpacing: '0.5px', flexShrink: 0,
+                  }}>{typeLabel}</span>
+                  <span style={{
+                    fontSize: '0.65rem', fontWeight: 600, color: s.color, fontFamily: 'var(--mono)',
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1,
+                  }} title={c.label}>{c.label}</span>
+                  {c.detail && (
+                    <span style={{ fontSize: '0.58rem', color: 'var(--muted)', fontFamily: 'var(--mono)', flexShrink: 0 }}>{c.detail}</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
