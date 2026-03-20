@@ -1834,15 +1834,21 @@ async def check_k8s_certs() -> dict:
 
         # ── 1. API server TLS certificate (live check) ───────────────────
         try:
+            from datetime import datetime as dt
+            from cryptography import x509
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
             with socket.create_connection(("kubernetes.default.svc", 443), timeout=10) as sock:
                 with ctx.wrap_socket(sock, server_hostname="kubernetes.default.svc") as ssock:
-                    cert = ssock.getpeercert()
-                    not_after = cert.get("notAfter", "")
-                    from datetime import datetime as dt
-                    expiry = dt.strptime(not_after, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
+                    # getpeercert(True) returns DER bytes even with CERT_NONE
+                    der_bytes = ssock.getpeercert(True)
+                    if not der_bytes:
+                        raise RuntimeError("No certificate returned by API server")
+                    cert_obj = x509.load_der_x509_certificate(der_bytes)
+                    expiry = cert_obj.not_valid_after_utc
+                    subject = cert_obj.subject.rfc4514_string()
+                    issuer = cert_obj.issuer.rfc4514_string()
                     now = dt.now(timezone.utc)
                     days_left = (expiry - now).days
                     status = "ok"
@@ -1854,8 +1860,11 @@ async def check_k8s_certs() -> dict:
                         "name": "API Server TLS (live)",
                         "category": "live",
                         "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S UTC"),
+                        "not_after": expiry.strftime("%Y-%m-%dT%H:%M:%SZ"),
                         "days_left": days_left,
                         "status": status,
+                        "subject": subject,
+                        "issuer": issuer,
                     })
                     logger.info(f"[k8s_certs] API Server TLS: expires={expiry} days_left={days_left} -> {status}")
         except Exception as e:
@@ -2726,15 +2735,18 @@ async def cert_prechecks():
 
     # 6. API Server certificate expiry
     try:
+        from cryptography import x509 as x509_mod
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
         with socket.create_connection(("kubernetes.default.svc", 443), timeout=10) as sock:
             with ctx.wrap_socket(sock, server_hostname="kubernetes.default.svc") as ssock:
-                cert = ssock.getpeercert()
-                not_after = cert.get("notAfter", "")
-                expiry = dt.strptime(not_after, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
-                days_left = (expiry - dt.now(timezone.utc)).days
+                der_bytes = ssock.getpeercert(True)
+                if not der_bytes:
+                    raise RuntimeError("No certificate returned")
+                cert_obj = x509_mod.load_der_x509_certificate(der_bytes)
+                expiry = cert_obj.not_valid_after_utc
+                days_left = (expiry - dt.now(timezone)).days
                 if days_left <= 0:
                     checks.append({"id": "cert_expiry", "label": "API Server Certificate Valid", "status": "fail",
                                    "detail": f"EXPIRED ({expiry.strftime('%Y-%m-%d')})"})
@@ -2844,10 +2856,10 @@ async def cert_prechecks():
         if cm_backup:
             bk_status = cm_backup.get("status", "error")
             bk_path = cm_backup.get("latest", "unknown")
-            bk_size = cm_backup.get("size_mb", 0)
+            bk_size = cm_backup.get("size_display", cm_backup.get("size_mb", "?"))
             checks.append({"id": "backup", "label": "PKI Backup",
                            "status": "pass" if bk_status == "ok" else "fail",
-                           "detail": f"{bk_path} ({bk_size}MB)"})
+                           "detail": f"{bk_path} ({bk_size})"})
     else:
         checks.append({"id": "cm_missing", "label": "Cert Scan Data (ConfigMap)",
                        "status": "warn",

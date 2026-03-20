@@ -177,7 +177,7 @@ function BackupBar({ backup }) {
           <div>
             <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text)' }}>PKI Backup</div>
             <div style={{ fontSize: '0.6rem', fontFamily: 'var(--mono)', color: 'var(--muted)', marginTop: 2 }}>
-              {backup.latest} ({backup.size_mb}MB)
+              {backup.latest} ({backup.size_display || `${backup.size_mb || 0}MB`})
             </div>
           </div>
         </div>
@@ -206,7 +206,7 @@ function BackupBar({ backup }) {
                 {i === 0 ? '● Latest' : '○'}
               </span>
               <span>{b.path}</span>
-              <span style={{ marginLeft: 'auto' }}>{b.size_mb}MB</span>
+              <span style={{ marginLeft: 'auto' }}>{b.size_display || `${b.size_mb || 0}MB`}</span>
             </div>
           ))}
         </div>

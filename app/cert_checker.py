@@ -420,8 +420,9 @@ def do_backup():
         shutil.copytree(str(PKI_DIR), str(backup_path))
 
         # Calculate size
-        size_mb = sum(f.stat().st_size for f in backup_path.rglob("*") if f.is_file()) / (1024 * 1024)
-        size_mb = round(size_mb, 1)
+        size_bytes = sum(f.stat().st_size for f in backup_path.rglob("*") if f.is_file())
+        size_mb = round(size_bytes / (1024 * 1024), 1)
+        size_display = f"{round(size_bytes / 1024)}KB" if size_mb < 1 else f"{size_mb}MB"
 
         # Cleanup old backups (keep MAX_BACKUPS)
         existing = sorted(BACKUP_BASE.glob("pki-backup-*"), key=lambda p: p.name, reverse=True)
@@ -433,18 +434,22 @@ def do_backup():
         current_backups = sorted(BACKUP_BASE.glob("pki-backup-*"), key=lambda p: p.name, reverse=True)
         backup_list = []
         for b in current_backups[:MAX_BACKUPS]:
-            b_size = sum(f.stat().st_size for f in b.rglob("*") if f.is_file()) / (1024 * 1024)
+            b_bytes = sum(f.stat().st_size for f in b.rglob("*") if f.is_file())
+            b_mb = round(b_bytes / (1024 * 1024), 1)
+            b_display = f"{round(b_bytes / 1024)}KB" if b_mb < 1 else f"{b_mb}MB"
             backup_list.append({
                 "name": b.name,
                 "path": f"/var/lib/healthwatch/pki-backups/{b.name}",
-                "size_mb": round(b_size, 1),
+                "size_display": b_display,
+                "size_bytes": b_bytes,
             })
 
-        log(f"  Backup created: {host_display_path} ({size_mb}MB)")
+        log(f"  Backup created: {host_display_path} ({size_display})")
         return {
             "latest": host_display_path,
             "created": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "size_mb": size_mb,
+            "size_display": size_display,
+            "size_bytes": size_bytes,
             "total_backups": len(current_backups),
             "history": backup_list,
             "status": "ok",
