@@ -1,0 +1,49 @@
+{{- if and .Values.certChecker.enabled .Values.rbac.create }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "healthwatch.fullname" . }}-cert-checker
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "healthwatch.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cert-checker
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "healthwatch.fullname" . }}-cert-writer
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "healthwatch.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cert-checker
+rules:
+  # Write cert-status ConfigMap
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "create", "update", "patch"]
+    resourceNames: [{{ .Values.certChecker.configMapName | quote }}]
+  # Need create without resourceName restriction for initial creation
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["create"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "healthwatch.fullname" . }}-cert-writer-binding
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "healthwatch.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cert-checker
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "healthwatch.fullname" . }}-cert-writer
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "healthwatch.fullname" . }}-cert-checker
+    namespace: {{ .Values.namespace }}
+{{- end }}

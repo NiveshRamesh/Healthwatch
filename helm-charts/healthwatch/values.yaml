@@ -83,3 +83,11 @@ serviceAccount:
 
 rbac:
   create: true
+
+# ── Cert Checker CronJob ───────────────────────────────────────────────────
+certChecker:
+  enabled: true
+  schedule: "0 */6 * * *"          # Every 6 hours
+  configMapName: "cert-status"     # ConfigMap name for cert data
+  thresholdDays: "30"              # Days before expiry to warn
+  maxBackups: "3"                  # Keep N most recent PKI backups

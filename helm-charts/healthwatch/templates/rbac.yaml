@@ -19,6 +19,22 @@ rules:
   - apiGroups: ["metrics.k8s.io"]
     resources: ["nodes", "pods"]
     verbs: ["get", "list"]
+  # ConfigMaps — read cert-status from cert-checker CronJob
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+  # CSR access for cert health checks
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["certificatesigningrequests"]
+    verbs: ["get", "list"]
+  # DaemonSets — post-renewal checks (kube-proxy, CNI)
+  - apiGroups: ["apps"]
+    resources: ["daemonsets", "deployments"]
+    verbs: ["get", "list"]
+  # Events — post-renewal warning event detection
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1

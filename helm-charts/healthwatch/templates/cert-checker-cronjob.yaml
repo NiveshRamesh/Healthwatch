@@ -1,0 +1,91 @@
+{{- if .Values.certChecker.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "healthwatch.fullname" . }}-cert-checker
+  namespace: {{ .Values.namespace }}
+  labels:
+    {{- include "healthwatch.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cert-checker
+spec:
+  schedule: {{ .Values.certChecker.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 300
+      template:
+        metadata:
+          labels:
+            {{- include "healthwatch.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: cert-checker
+        spec:
+          serviceAccountName: {{ include "healthwatch.fullname" . }}-cert-checker
+          restartPolicy: OnFailure
+          # Run on control plane node
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: ""
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+            - key: node-role.kubernetes.io/master
+              operator: Exists
+              effect: NoSchedule
+          containers:
+            - name: cert-checker
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command: ["python", "-m", "app.cert_checker"]
+              env:
+                - name: NAMESPACE
+                  value: {{ .Values.namespace | quote }}
+                - name: CONFIGMAP_NAME
+                  value: {{ .Values.certChecker.configMapName | quote }}
+                - name: CERT_WARN_DAYS
+                  value: {{ .Values.certChecker.thresholdDays | quote }}
+                - name: MAX_BACKUPS
+                  value: {{ .Values.certChecker.maxBackups | quote }}
+                - name: NODE_NAME
+                  valueFrom:
+                    fieldRef:
+                      fieldPath: spec.nodeName
+              volumeMounts:
+                - name: host-pki
+                  mountPath: /host-pki
+                  readOnly: true
+                - name: host-kube
+                  mountPath: /host-kube
+                  readOnly: true
+                - name: host-manifests
+                  mountPath: /host-manifests
+                  readOnly: true
+                - name: backups
+                  mountPath: /backups
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  cpu: "200m"
+                  memory: "128Mi"
+          volumes:
+            - name: host-pki
+              hostPath:
+                path: /etc/kubernetes/pki
+                type: Directory
+            - name: host-kube
+              hostPath:
+                path: /etc/kubernetes
+                type: Directory
+            - name: host-manifests
+              hostPath:
+                path: /etc/kubernetes/manifests
+                type: DirectoryOrCreate
+            - name: backups
+              hostPath:
+                path: /var/lib/healthwatch/pki-backups
+                type: DirectoryOrCreate
+{{- end }}

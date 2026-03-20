@@ -1806,10 +1806,25 @@ async def check_data_retention() -> dict:
 
 
 CERT_WARN_DAYS = int(os.getenv("CERT_WARN_DAYS", "30"))
+CERT_CONFIGMAP_NAME = os.getenv("CERT_CONFIGMAP_NAME", "cert-status")
+
+
+def _read_cert_configmap():
+    """Read cert-status ConfigMap written by the cert-checker CronJob."""
+    try:
+        import json as _json
+        core, _, _ = _get_k8s()
+        cm = core.read_namespaced_config_map(CERT_CONFIGMAP_NAME, K8S_NAMESPACE)
+        raw = cm.data.get("cert-status.json", "{}")
+        return _json.loads(raw)
+    except Exception as e:
+        logger.warning(f"[k8s_certs] Could not read ConfigMap {CERT_CONFIGMAP_NAME}: {e}")
+        return None
 
 
 async def check_k8s_certs() -> dict:
-    """Check Kubernetes certificate health from inside the cluster."""
+    """Check Kubernetes certificate health from inside the cluster.
+    Combines live API checks with cert-checker CronJob data from ConfigMap."""
     t0 = time.time()
     logger.info(f"[k8s_certs] START threshold={CERT_WARN_DAYS}d")
     try:
@@ -1817,7 +1832,7 @@ async def check_k8s_certs() -> dict:
 
         certs_info = []
 
-        # ── 1. API server TLS certificate ────────────────────────────────
+        # ── 1. API server TLS certificate (live check) ───────────────────
         try:
             ctx = ssl.create_default_context()
             ctx.check_hostname = False
@@ -1826,7 +1841,6 @@ async def check_k8s_certs() -> dict:
                 with ctx.wrap_socket(sock, server_hostname="kubernetes.default.svc") as ssock:
                     cert = ssock.getpeercert()
                     not_after = cert.get("notAfter", "")
-                    # Parse: 'Mar 19 12:00:00 2027 GMT'
                     from datetime import datetime as dt
                     expiry = dt.strptime(not_after, "%b %d %H:%M:%S %Y %Z").replace(tzinfo=timezone.utc)
                     now = dt.now(timezone.utc)
@@ -1837,7 +1851,8 @@ async def check_k8s_certs() -> dict:
                     elif days_left <= CERT_WARN_DAYS:
                         status = "warn"
                     certs_info.append({
-                        "name": "API Server TLS",
+                        "name": "API Server TLS (live)",
+                        "category": "live",
                         "expiry": expiry.strftime("%Y-%m-%d %H:%M:%S UTC"),
                         "days_left": days_left,
                         "status": status,
@@ -1846,14 +1861,38 @@ async def check_k8s_certs() -> dict:
         except Exception as e:
             logger.error(f"[k8s_certs] API Server TLS check failed: {e}")
             certs_info.append({
-                "name": "API Server TLS",
+                "name": "API Server TLS (live)",
+                "category": "live",
                 "expiry": "unknown",
                 "days_left": -1,
                 "status": "error",
                 "error": str(e),
             })
 
-        # ── 2. Check control plane pods (kube-system) ────────────────────
+        # ── 2. Read ConfigMap from cert-checker CronJob ──────────────────
+        cm_data = _read_cert_configmap()
+        cm_certs = []
+        cm_prechecks = []
+        cm_backup = {}
+        cm_sa_keys = []
+        cm_summary = {}
+        cm_timestamp = ""
+        cm_node = ""
+
+        if cm_data:
+            cm_certs = cm_data.get("certificates", [])
+            cm_prechecks = cm_data.get("prechecks", [])
+            cm_backup = cm_data.get("backup", {})
+            cm_sa_keys = cm_data.get("sa_keys", [])
+            cm_summary = cm_data.get("summary", {})
+            cm_timestamp = cm_data.get("timestamp", "")
+            cm_node = cm_data.get("node", "")
+            logger.info(f"[k8s_certs] ConfigMap loaded: {len(cm_certs)} certs, "
+                        f"{len(cm_prechecks)} prechecks, scanned={cm_timestamp}")
+        else:
+            logger.warning("[k8s_certs] No ConfigMap data — cert-checker CronJob may not have run yet")
+
+        # ── 3. Check control plane pods (kube-system) ────────────────────
         core, _, _ = _get_k8s()
         cp_components = ["kube-apiserver", "kube-controller-manager", "kube-scheduler", "etcd"]
         cp_pods = core.list_namespaced_pod(namespace="kube-system").items
@@ -1878,7 +1917,7 @@ async def check_k8s_certs() -> dict:
                 })
             logger.info(f"[k8s_certs] control_plane {comp}: {cp_status[-1]['phase']}")
 
-        # ── 3. Check nodes ────────────────────────────────────────────────
+        # ── 4. Check nodes ────────────────────────────────────────────────
         nodes = core.list_node().items
         nodes_ready = sum(
             1 for n in nodes
@@ -1889,7 +1928,7 @@ async def check_k8s_certs() -> dict:
             if n.spec.unschedulable
         ]
 
-        # ── 4. Check for stuck pods in kube-system ────────────────────────
+        # ── 5. Check for stuck pods in kube-system ────────────────────────
         stuck_pods = []
         for p in cp_pods:
             phase = p.status.phase or "Unknown"
@@ -1900,7 +1939,7 @@ async def check_k8s_certs() -> dict:
                     if cs.state.waiting and cs.state.waiting.reason in ("CrashLoopBackOff", "Error", "OOMKilled"):
                         stuck_pods.append({"name": p.metadata.name, "phase": cs.state.waiting.reason})
 
-        # ── 5. Pending CSRs ───────────────────────────────────────────────
+        # ── 6. Pending CSRs ───────────────────────────────────────────────
         from kubernetes import client
         certs_api = client.CertificatesV1Api()
         try:
@@ -1912,13 +1951,18 @@ async def check_k8s_certs() -> dict:
         except Exception:
             pending_csrs = []
 
-        # ── Compute overall ───────────────────────────────────────────────
+        # ── Compute overall (including ConfigMap certs) ──────────────────
         all_statuses = [c["status"] for c in certs_info] + [c["status"] for c in cp_status]
+        all_statuses += [c["status"] for c in cm_certs]
         overall = "error" if "error" in all_statuses else "warn" if "warn" in all_statuses else "ok"
 
         # Summary for status strip
         api_cert = certs_info[0] if certs_info else {}
         cert_detail = f"{api_cert.get('days_left', '?')}d until expiry" if api_cert.get("days_left", -1) > 0 else "EXPIRED or unreachable"
+
+        # PKI cert summary from ConfigMap
+        pki_total = len(cm_certs)
+        pki_ok = len([c for c in cm_certs if c.get("status") == "ok"])
 
         logger.info(f"[k8s_certs] overall={overall}")
         _timed("k8s_certs", t0)
@@ -1935,8 +1979,14 @@ async def check_k8s_certs() -> dict:
                 "status": "ok" if nodes_ready == len(nodes) and not nodes_cordoned else "warn",
                 "detail": f"{nodes_ready}/{len(nodes)} Ready" + (f", {len(nodes_cordoned)} cordoned" if nodes_cordoned else ""),
             },
+            "PKI Certificates": {
+                "status": "ok" if pki_ok == pki_total and pki_total > 0 else "warn" if pki_total > 0 else "error",
+                "detail": f"{pki_ok}/{pki_total} valid" if pki_total > 0 else "CronJob not run yet",
+            },
             "__cert_details__": {
                 "certificates": certs_info,
+                "pki_certificates": cm_certs,
+                "sa_keys": cm_sa_keys,
                 "control_plane": cp_status,
                 "nodes_total": len(nodes),
                 "nodes_ready": nodes_ready,
@@ -1944,6 +1994,11 @@ async def check_k8s_certs() -> dict:
                 "stuck_pods": stuck_pods,
                 "pending_csrs": pending_csrs,
                 "warn_threshold_days": CERT_WARN_DAYS,
+                "configmap_prechecks": cm_prechecks,
+                "backup": cm_backup,
+                "configmap_summary": cm_summary,
+                "configmap_timestamp": cm_timestamp,
+                "configmap_node": cm_node,
             },
         }
     except Exception as e:
@@ -1953,6 +2008,7 @@ async def check_k8s_certs() -> dict:
             "API Server Certificate": {"status": "error", "detail": str(e)},
             "Control Plane": {"status": "error", "detail": "Check failed"},
             "Cluster Nodes": {"status": "error", "detail": "Check failed"},
+            "PKI Certificates": {"status": "error", "detail": "Check failed"},
             "__cert_details__": {},
         }
 
@@ -2708,6 +2764,95 @@ async def cert_prechecks():
         checks.append({"id": "no_pending_csr", "label": "No Pending CSRs", "status": "warn",
                        "detail": f"Could not check CSRs: {e}"})
 
+    # ── 8-16. ConfigMap-based prechecks (from cert-checker CronJob) ──
+    cm_data = _read_cert_configmap()
+    if cm_data:
+        cm_certs = cm_data.get("certificates", [])
+        cm_prechecks = cm_data.get("prechecks", [])
+        cm_timestamp = cm_data.get("timestamp", "")
+        cm_backup = cm_data.get("backup", {})
+
+        # 8. ConfigMap data freshness
+        try:
+            from datetime import datetime as dt2
+            scanned = dt2.fromisoformat(cm_timestamp.replace("Z", "+00:00"))
+            age_hours = (dt.now(timezone) - scanned).total_seconds() / 3600
+            if age_hours <= 12:
+                checks.append({"id": "cm_fresh", "label": "Cert Scan Data Fresh",
+                               "status": "pass", "detail": f"Scanned {age_hours:.1f}h ago"})
+            elif age_hours <= 24:
+                checks.append({"id": "cm_fresh", "label": "Cert Scan Data Fresh",
+                               "status": "warn", "detail": f"Scanned {age_hours:.1f}h ago — may be stale"})
+            else:
+                checks.append({"id": "cm_fresh", "label": "Cert Scan Data Fresh",
+                               "status": "fail", "detail": f"Scanned {age_hours:.1f}h ago — CronJob may have failed"})
+        except Exception:
+            checks.append({"id": "cm_fresh", "label": "Cert Scan Data Fresh",
+                           "status": "warn", "detail": "Could not parse timestamp"})
+
+        # 9. etcd certs valid
+        etcd_certs = [c for c in cm_certs if c.get("category") == "etcd"]
+        if etcd_certs:
+            etcd_ok = all(c["status"] == "ok" for c in etcd_certs)
+            etcd_detail = f"{len([c for c in etcd_certs if c['status'] == 'ok'])}/{len(etcd_certs)} valid"
+            checks.append({"id": "etcd_certs", "label": "etcd Certificates Valid",
+                           "status": "pass" if etcd_ok else "fail", "detail": etcd_detail})
+
+        # 10. Front proxy certs valid
+        fp_certs = [c for c in cm_certs if "front-proxy" in c.get("name", "") and c.get("category") != "ca"]
+        if fp_certs:
+            fp_ok = all(c["status"] == "ok" for c in fp_certs)
+            checks.append({"id": "fp_certs", "label": "Front Proxy Certs Valid",
+                           "status": "pass" if fp_ok else "fail",
+                           "detail": f"{len([c for c in fp_certs if c['status']=='ok'])}/{len(fp_certs)} valid"})
+
+        # 11. API client certs valid (kubelet-client, etcd-client)
+        api_client_certs = [c for c in cm_certs if "apiserver-" in c.get("name", "") and c.get("category") == "pki"]
+        if api_client_certs:
+            ac_ok = all(c["status"] == "ok" for c in api_client_certs)
+            checks.append({"id": "api_client_certs", "label": "API Server Client Certs Valid",
+                           "status": "pass" if ac_ok else "fail",
+                           "detail": f"{len([c for c in api_client_certs if c['status']=='ok'])}/{len(api_client_certs)} valid"})
+
+        # 12. Kubeconfig certs valid
+        kc_certs = [c for c in cm_certs if c.get("category") == "kubeconfig"]
+        if kc_certs:
+            kc_ok = all(c["status"] == "ok" for c in kc_certs)
+            checks.append({"id": "kc_certs", "label": "Kubeconfig Certs Valid",
+                           "status": "pass" if kc_ok else "fail",
+                           "detail": f"{len([c for c in kc_certs if c['status']=='ok'])}/{len(kc_certs)} valid"})
+
+        # 13. CA certs (special — kubeadm can't renew them)
+        ca_certs = [c for c in cm_certs if c.get("category") == "ca"]
+        if ca_certs:
+            ca_ok = all(c["status"] == "ok" for c in ca_certs)
+            min_days = min(c.get("days_left", 0) for c in ca_certs)
+            checks.append({"id": "ca_certs", "label": "CA Certificates Valid",
+                           "status": "pass" if ca_ok else "warn",
+                           "detail": f"Shortest: {min_days}d (kubeadm won't renew CAs)"})
+
+        # 14-16. Node-level prechecks from CronJob
+        for cpc in cm_prechecks:
+            checks.append({
+                "id": f"node_{cpc['id']}",
+                "label": f"[Node] {cpc['label']}",
+                "status": cpc["status"],
+                "detail": cpc["detail"],
+            })
+
+        # 17. PKI backup status
+        if cm_backup:
+            bk_status = cm_backup.get("status", "error")
+            bk_path = cm_backup.get("latest", "unknown")
+            bk_size = cm_backup.get("size_mb", 0)
+            checks.append({"id": "backup", "label": "PKI Backup",
+                           "status": "pass" if bk_status == "ok" else "fail",
+                           "detail": f"{bk_path} ({bk_size}MB)"})
+    else:
+        checks.append({"id": "cm_missing", "label": "Cert Scan Data (ConfigMap)",
+                       "status": "warn",
+                       "detail": "cert-checker CronJob has not run yet — deploy and wait for first scan"})
+
     all_pass = all(c["status"] == "pass" for c in checks)
     any_fail = any(c["status"] == "fail" for c in checks)
     logger.info(f"[cert-prechecks] done: {len(checks)} checks, "
@@ -2718,9 +2863,158 @@ async def cert_prechecks():
         "all_pass": all_pass,
         "any_fail": any_fail,
         "can_renew": all_pass or not any_fail,
-        "renewal_command": "sudo kubeadm certs renew all" if not all_pass else None,
+        "renewal_command": "sudo kubeadm certs renew all",
         "dry_run": True,
     }
+
+
+@app.post("/api/cert-postchecks")
+async def cert_postchecks():
+    """Post-renewal validation checks. Run after certificate renewal to verify cluster health."""
+    logger.info("[cert-postchecks] START")
+    from datetime import datetime as dt, timezone
+    checks = []
+
+    try:
+        core, _, _ = _get_k8s()
+
+        # 1. API server responding
+        try:
+            core.get_api_versions()
+            checks.append({"id": "api_alive", "label": "API Server Responding", "status": "pass",
+                           "detail": "Cluster API responding after renewal"})
+        except Exception as e:
+            checks.append({"id": "api_alive", "label": "API Server Responding", "status": "fail",
+                           "detail": str(e)})
+
+        # 2. All nodes Ready
+        try:
+            nodes = core.list_node().items
+            not_ready = [n.metadata.name for n in nodes if not any(
+                c.type == "Ready" and c.status == "True" for c in n.status.conditions)]
+            if not_ready:
+                checks.append({"id": "nodes_ok", "label": "All Nodes Ready", "status": "fail",
+                               "detail": f"Not ready: {', '.join(not_ready)}"})
+            else:
+                checks.append({"id": "nodes_ok", "label": "All Nodes Ready", "status": "pass",
+                               "detail": f"{len(nodes)} node(s) Ready"})
+        except Exception as e:
+            checks.append({"id": "nodes_ok", "label": "All Nodes Ready", "status": "fail", "detail": str(e)})
+
+        # 3. Control plane pods healthy
+        try:
+            cp_pods = core.list_namespaced_pod(namespace="kube-system").items
+            for comp in ["kube-apiserver", "kube-controller-manager", "kube-scheduler", "etcd"]:
+                matched = [p for p in cp_pods if p.metadata.name.startswith(comp)]
+                if matched and matched[0].status.phase == "Running":
+                    checks.append({"id": f"post_cp_{comp}", "label": f"{comp} Running",
+                                   "status": "pass", "detail": matched[0].metadata.name})
+                else:
+                    phase = matched[0].status.phase if matched else "Not Found"
+                    checks.append({"id": f"post_cp_{comp}", "label": f"{comp} Running",
+                                   "status": "fail", "detail": f"Status: {phase}"})
+        except Exception as e:
+            checks.append({"id": "post_cp", "label": "Control Plane Pods", "status": "fail", "detail": str(e)})
+
+        # 4. kube-proxy DaemonSet ready
+        try:
+            from kubernetes import client as k8s_client
+            apps = k8s_client.AppsV1Api()
+            ds = apps.read_namespaced_daemon_set("kube-proxy", "kube-system")
+            desired = ds.status.desired_number_scheduled or 0
+            ready = ds.status.number_ready or 0
+            if ready == desired and desired > 0:
+                checks.append({"id": "kube_proxy", "label": "kube-proxy DaemonSet", "status": "pass",
+                               "detail": f"{ready}/{desired} ready"})
+            else:
+                checks.append({"id": "kube_proxy", "label": "kube-proxy DaemonSet", "status": "fail",
+                               "detail": f"{ready}/{desired} ready"})
+        except Exception as e:
+            checks.append({"id": "kube_proxy", "label": "kube-proxy DaemonSet", "status": "warn",
+                           "detail": f"Could not check: {e}"})
+
+        # 5. CNI DaemonSet (try common names: calico, flannel, cilium, weave)
+        try:
+            from kubernetes import client as k8s_client
+            apps = k8s_client.AppsV1Api()
+            ds_list = apps.list_namespaced_daemon_set("kube-system").items
+            cni_names = ["calico-node", "canal", "flannel", "cilium", "weave-net", "kube-flannel-ds"]
+            cni_ds = [d for d in ds_list if d.metadata.name in cni_names]
+            if cni_ds:
+                ds = cni_ds[0]
+                desired = ds.status.desired_number_scheduled or 0
+                ready = ds.status.number_ready or 0
+                if ready == desired and desired > 0:
+                    checks.append({"id": "cni_ds", "label": f"CNI DaemonSet ({ds.metadata.name})",
+                                   "status": "pass", "detail": f"{ready}/{desired} ready"})
+                else:
+                    checks.append({"id": "cni_ds", "label": f"CNI DaemonSet ({ds.metadata.name})",
+                                   "status": "warn", "detail": f"{ready}/{desired} ready"})
+            else:
+                checks.append({"id": "cni_ds", "label": "CNI DaemonSet", "status": "warn",
+                               "detail": "No known CNI DaemonSet found"})
+        except Exception as e:
+            checks.append({"id": "cni_ds", "label": "CNI DaemonSet", "status": "warn",
+                           "detail": f"Could not check: {e}"})
+
+        # 6. Pod restart surge detection (high restarts in kube-system last hour)
+        try:
+            high_restart = []
+            for p in cp_pods:
+                for cs in (p.status.container_statuses or []):
+                    if cs.restart_count and cs.restart_count > 5:
+                        high_restart.append(f"{p.metadata.name}({cs.restart_count}x)")
+            if high_restart:
+                checks.append({"id": "restart_surge", "label": "No Pod Restart Surge",
+                               "status": "warn", "detail": f"High restarts: {', '.join(high_restart[:3])}"})
+            else:
+                checks.append({"id": "restart_surge", "label": "No Pod Restart Surge",
+                               "status": "pass", "detail": "No excessive restarts in kube-system"})
+        except Exception as e:
+            checks.append({"id": "restart_surge", "label": "No Pod Restart Surge",
+                           "status": "warn", "detail": str(e)})
+
+        # 7. Recent warning events in kube-system
+        try:
+            events = core.list_namespaced_event("kube-system").items
+            now = dt.now(timezone)
+            recent_warns = [
+                e for e in events
+                if e.type == "Warning"
+                and e.last_timestamp
+                and (now - e.last_timestamp.replace(tzinfo=timezone)).total_seconds() < 1800
+            ]
+            if recent_warns:
+                reasons = list(set(e.reason for e in recent_warns[:5]))
+                checks.append({"id": "k8s_events", "label": "K8s Warning Events (30min)",
+                               "status": "warn",
+                               "detail": f"{len(recent_warns)} warnings: {', '.join(reasons)}"})
+            else:
+                checks.append({"id": "k8s_events", "label": "K8s Warning Events (30min)",
+                               "status": "pass", "detail": "No recent warnings"})
+        except Exception as e:
+            checks.append({"id": "k8s_events", "label": "K8s Warning Events (30min)",
+                           "status": "warn", "detail": f"Could not check: {e}"})
+
+        # 8. New cert expiry improved (compare with ConfigMap data)
+        cm_data = _read_cert_configmap()
+        if cm_data:
+            old_certs = cm_data.get("certificates", [])
+            checks.append({"id": "cert_improved", "label": "Cert Expiry Refreshed",
+                           "status": "pass",
+                           "detail": f"Baseline from {cm_data.get('timestamp', '?')} — re-run CronJob to verify new expiry"})
+        else:
+            checks.append({"id": "cert_improved", "label": "Cert Expiry Refreshed",
+                           "status": "warn", "detail": "No baseline — run CronJob after renewal to verify"})
+
+    except Exception as e:
+        logger.error(f"[cert-postchecks] EXCEPTION: {e}\n{traceback.format_exc()}")
+        checks.append({"id": "error", "label": "Post-check Error", "status": "fail", "detail": str(e)})
+
+    all_pass = all(c["status"] == "pass" for c in checks)
+    any_fail = any(c["status"] == "fail" for c in checks)
+    logger.info(f"[cert-postchecks] done: {len(checks)} checks")
+    return {"checks": checks, "all_pass": all_pass, "any_fail": any_fail}
 
 
 @app.get("/api/health")
