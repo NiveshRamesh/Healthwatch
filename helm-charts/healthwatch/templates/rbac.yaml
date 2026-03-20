@@ -35,6 +35,13 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list"]
+  # Batch — trigger cert-checker CronJob on demand (refresh scan)
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["get"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "create"]
 
 ---
 apiVersion: rbac.authorization.k8s.io/v1

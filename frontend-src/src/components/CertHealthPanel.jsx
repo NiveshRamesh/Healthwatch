@@ -264,10 +264,12 @@ function PrecheckItem({ check, index, activeIndex }) {
   if (isDone) {
     const st = check.status;
     const bg = st === 'pass' ? 'rgba(16,185,129,0.2)' : st === 'warn' ? 'rgba(245,158,11,0.2)' :
+               st === 'info' ? 'rgba(0,153,255,0.15)' :
                st === 'skip' ? 'rgba(100,116,139,0.2)' : 'rgba(239,68,68,0.2)';
     const color = st === 'pass' ? 'var(--ok)' : st === 'warn' ? 'var(--warn)' :
+                  st === 'info' ? 'var(--accent2)' :
                   st === 'skip' ? 'var(--muted)' : 'var(--error)';
-    const icon = st === 'pass' ? '✓' : st === 'warn' ? '!' : st === 'skip' ? '⊘' : '✕';
+    const icon = st === 'pass' ? '✓' : st === 'warn' ? '!' : st === 'info' ? 'ℹ' : st === 'skip' ? '⊘' : '✕';
     bullet = <div style={{ ...bulletStyle, background: bg, color, border: `2px solid ${color}` }}>{icon}</div>;
   } else if (isActive) {
     bullet = (
@@ -312,6 +314,7 @@ function PrecheckItem({ check, index, activeIndex }) {
           <div style={{
             fontSize: '0.6rem', fontFamily: 'var(--mono)', marginTop: 2,
             color: check.status === 'pass' ? 'var(--muted)' : check.status === 'warn' ? 'var(--warn)' :
+                   check.status === 'info' ? 'var(--accent2)' :
                    check.status === 'skip' ? 'var(--muted)' : 'var(--error)',
           }}>{check.detail}</div>
         )}
@@ -321,12 +324,14 @@ function PrecheckItem({ check, index, activeIndex }) {
           fontSize: '0.52rem', fontWeight: 700, fontFamily: 'var(--mono)',
           padding: '2px 6px', borderRadius: 4, letterSpacing: '0.5px',
           background: check.status === 'pass' ? 'rgba(16,185,129,0.1)' : check.status === 'warn' ? 'rgba(245,158,11,0.1)' :
+                      check.status === 'info' ? 'rgba(0,153,255,0.1)' :
                       check.status === 'skip' ? 'rgba(100,116,139,0.1)' : 'rgba(239,68,68,0.1)',
           color: check.status === 'pass' ? 'var(--ok)' : check.status === 'warn' ? 'var(--warn)' :
+                 check.status === 'info' ? 'var(--accent2)' :
                  check.status === 'skip' ? 'var(--muted)' : 'var(--error)',
         }}>
           {check.status === 'pass' ? 'PASS' : check.status === 'warn' ? 'WARN' :
-           check.status === 'skip' ? 'SKIP' : 'FAIL'}
+           check.status === 'info' ? 'INFO' : check.status === 'skip' ? 'SKIP' : 'FAIL'}
         </span>
       )}
     </div>
@@ -347,15 +352,36 @@ function PrecheckWizard() {
   const [postActiveIndex, setPostActiveIndex] = useState(-1);
   const [postDone, setPostDone] = useState(false);
 
+  const [scanStatus, setScanStatus] = useState('');
+
   const runPrechecks = useCallback(async () => {
     setRunning(true);
     setDone(false);
     setChecks([]);
-    setActiveIndex(0);
+    setActiveIndex(-1);
     setResult(null);
     setPostChecks([]);
     setPostDone(false);
 
+    // Step 1: Trigger fresh cert scan before running prechecks
+    setScanStatus('Triggering fresh cert scan...');
+    try {
+      const scanRes = await fetch(`${BASE}/api/cert-refresh-scan`, { method: 'POST' });
+      const scanData = await scanRes.json();
+      if (scanData.status === 'ok') {
+        setScanStatus('');
+        setChecks([{ id: 'scan', label: 'Fresh Cert Scan', status: 'pass', detail: `Scanned at ${scanData.timestamp}` }]);
+      } else {
+        setScanStatus('');
+        setChecks([{ id: 'scan', label: 'Fresh Cert Scan', status: 'warn', detail: scanData.detail || 'Using cached data' }]);
+      }
+    } catch (e) {
+      setScanStatus('');
+      setChecks([{ id: 'scan', label: 'Fresh Cert Scan', status: 'warn', detail: 'Could not trigger scan — using cached data' }]);
+    }
+    setActiveIndex(1);
+
+    // Step 2: Run prechecks with fresh data
     try {
       const res = await fetch(`${BASE}/api/cert-prechecks`, { method: 'POST' });
       const data = await res.json();
@@ -363,11 +389,11 @@ function PrecheckWizard() {
       setResult(data);
 
       for (let i = 0; i < allChecks.length; i++) {
-        setActiveIndex(i);
+        setActiveIndex(i + 1);
         setChecks(prev => [...prev, allChecks[i]]);
         await new Promise(r => setTimeout(r, 300 + Math.random() * 200));
       }
-      setActiveIndex(allChecks.length);
+      setActiveIndex(allChecks.length + 1);
       setDone(true);
     } catch (e) {
       setChecks(prev => [...prev, { id: 'error', label: 'Precheck Failed', status: 'fail', detail: String(e) }]);
@@ -380,19 +406,37 @@ function PrecheckWizard() {
     setPostRunning(true);
     setPostDone(false);
     setPostChecks([]);
-    setPostActiveIndex(0);
+    setPostActiveIndex(-1);
 
+    // Step 1: Trigger fresh scan to capture renewed cert data
+    setScanStatus('Scanning renewed certificates...');
+    try {
+      const scanRes = await fetch(`${BASE}/api/cert-refresh-scan`, { method: 'POST' });
+      const scanData = await scanRes.json();
+      setScanStatus('');
+      if (scanData.status === 'ok') {
+        setPostChecks([{ id: 'post_scan', label: 'Post-Renewal Cert Scan', status: 'pass', detail: `Fresh scan at ${scanData.timestamp}` }]);
+      } else {
+        setPostChecks([{ id: 'post_scan', label: 'Post-Renewal Cert Scan', status: 'warn', detail: scanData.detail || 'Using cached data' }]);
+      }
+    } catch (e) {
+      setScanStatus('');
+      setPostChecks([{ id: 'post_scan', label: 'Post-Renewal Cert Scan', status: 'warn', detail: 'Could not trigger scan' }]);
+    }
+    setPostActiveIndex(1);
+
+    // Step 2: Run post-checks with fresh data
     try {
       const res = await fetch(`${BASE}/api/cert-postchecks`, { method: 'POST' });
       const data = await res.json();
       const allChecks = data.checks || [];
 
       for (let i = 0; i < allChecks.length; i++) {
-        setPostActiveIndex(i);
+        setPostActiveIndex(i + 1);
         setPostChecks(prev => [...prev, allChecks[i]]);
         await new Promise(r => setTimeout(r, 300 + Math.random() * 200));
       }
-      setPostActiveIndex(allChecks.length);
+      setPostActiveIndex(allChecks.length + 1);
       setPostDone(true);
     } catch (e) {
       setPostChecks(prev => [...prev, { id: 'error', label: 'Post-check Failed', status: 'fail', detail: String(e) }]);
@@ -404,6 +448,7 @@ function PrecheckWizard() {
   const passed = checks.filter(c => c.status === 'pass').length;
   const failed = checks.filter(c => c.status === 'fail').length;
   const warned = checks.filter(c => c.status === 'warn').length;
+  const infod = checks.filter(c => c.status === 'info').length;
   const skipped = checks.filter(c => c.status === 'skip').length;
   const canRenew = done && result && !result.any_fail;
 
@@ -439,7 +484,7 @@ function PrecheckWizard() {
             fontSize: '0.65rem', fontWeight: 700, cursor: running ? 'not-allowed' : 'pointer',
           }}
         >
-          {running ? '⏳ Running...' : '▶ Run Prechecks'}
+          {running ? (scanStatus || '⏳ Running...') : '▶ Run Prechecks'}
         </button>
       </div>
 
@@ -462,6 +507,7 @@ function PrecheckWizard() {
         }}>
           <div style={{ display: 'flex', gap: 10, fontFamily: 'var(--mono)', fontSize: '0.65rem', flexWrap: 'wrap' }}>
             <span style={{ color: 'var(--ok)', fontWeight: 600 }}>{passed} passed</span>
+            {infod > 0 && <span style={{ color: 'var(--accent2)', fontWeight: 600 }}>{infod} info</span>}
             {warned > 0 && <span style={{ color: 'var(--warn)', fontWeight: 600 }}>{warned} warn</span>}
             {failed > 0 && <span style={{ color: 'var(--error)', fontWeight: 600 }}>{failed} failed</span>}
             {skipped > 0 && <span style={{ color: 'var(--muted)', fontWeight: 600 }}>{skipped} skipped</span>}
@@ -503,7 +549,7 @@ function PrecheckWizard() {
                   fontSize: '0.65rem', fontWeight: 700, cursor: postRunning ? 'not-allowed' : 'pointer',
                 }}
               >
-                {postRunning ? '⏳ Checking...' : '🔍 Post-Checks'}
+                {postRunning ? (scanStatus || '⏳ Checking...') : '🔍 Post-Checks'}
               </button>
             )}
           </div>

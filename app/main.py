@@ -2804,46 +2804,47 @@ async def cert_prechecks():
             checks.append({"id": "cm_fresh", "label": "Cert Scan Data Fresh",
                            "status": "warn", "detail": "Could not parse timestamp"})
 
-        # 9. etcd certs valid
-        etcd_certs = [c for c in cm_certs if c.get("category") == "etcd"]
-        if etcd_certs:
-            etcd_ok = all(c["status"] == "ok" for c in etcd_certs)
-            etcd_detail = f"{len([c for c in etcd_certs if c['status'] == 'ok'])}/{len(etcd_certs)} valid"
-            checks.append({"id": "etcd_certs", "label": "etcd Certificates Valid",
-                           "status": "pass" if etcd_ok else "fail", "detail": etcd_detail})
+        # 9-12. Cert expiry status — INFORMATIONAL only, never blocks renewal
+        # (expired certs are the REASON for renewal, not a blocker)
+        cert_groups = [
+            ("etcd_certs", "etcd Certificates", [c for c in cm_certs if c.get("category") == "etcd"]),
+            ("fp_certs", "Front Proxy Certs", [c for c in cm_certs if "front-proxy" in c.get("name", "") and c.get("category") != "ca"]),
+            ("api_client_certs", "API Server Client Certs", [c for c in cm_certs if "apiserver-" in c.get("name", "") and c.get("category") == "pki"]),
+            ("kc_certs", "Kubeconfig Certs", [c for c in cm_certs if c.get("category") == "kubeconfig"]),
+        ]
+        for group_id, group_label, group_certs in cert_groups:
+            if group_certs:
+                ok_count = len([c for c in group_certs if c["status"] == "ok"])
+                expired = [c for c in group_certs if c["status"] == "error"]
+                expiring = [c for c in group_certs if c["status"] == "warn"]
+                if expired:
+                    # Expired certs = INFO, this is why we're renewing
+                    checks.append({"id": group_id, "label": group_label,
+                                   "status": "info",
+                                   "detail": f"{len(expired)} expired — renewal needed"})
+                elif expiring:
+                    checks.append({"id": group_id, "label": group_label,
+                                   "status": "info",
+                                   "detail": f"{len(expiring)} expiring soon, {ok_count}/{len(group_certs)} valid"})
+                else:
+                    checks.append({"id": group_id, "label": group_label,
+                                   "status": "pass",
+                                   "detail": f"{ok_count}/{len(group_certs)} valid"})
 
-        # 10. Front proxy certs valid
-        fp_certs = [c for c in cm_certs if "front-proxy" in c.get("name", "") and c.get("category") != "ca"]
-        if fp_certs:
-            fp_ok = all(c["status"] == "ok" for c in fp_certs)
-            checks.append({"id": "fp_certs", "label": "Front Proxy Certs Valid",
-                           "status": "pass" if fp_ok else "fail",
-                           "detail": f"{len([c for c in fp_certs if c['status']=='ok'])}/{len(fp_certs)} valid"})
-
-        # 11. API client certs valid (kubelet-client, etcd-client)
-        api_client_certs = [c for c in cm_certs if "apiserver-" in c.get("name", "") and c.get("category") == "pki"]
-        if api_client_certs:
-            ac_ok = all(c["status"] == "ok" for c in api_client_certs)
-            checks.append({"id": "api_client_certs", "label": "API Server Client Certs Valid",
-                           "status": "pass" if ac_ok else "fail",
-                           "detail": f"{len([c for c in api_client_certs if c['status']=='ok'])}/{len(api_client_certs)} valid"})
-
-        # 12. Kubeconfig certs valid
-        kc_certs = [c for c in cm_certs if c.get("category") == "kubeconfig"]
-        if kc_certs:
-            kc_ok = all(c["status"] == "ok" for c in kc_certs)
-            checks.append({"id": "kc_certs", "label": "Kubeconfig Certs Valid",
-                           "status": "pass" if kc_ok else "fail",
-                           "detail": f"{len([c for c in kc_certs if c['status']=='ok'])}/{len(kc_certs)} valid"})
-
-        # 13. CA certs (special — kubeadm can't renew them)
+        # 13. CA certs (special — kubeadm can't renew them, THIS is a real blocker)
         ca_certs = [c for c in cm_certs if c.get("category") == "ca"]
         if ca_certs:
-            ca_ok = all(c["status"] == "ok" for c in ca_certs)
+            ca_expired = [c for c in ca_certs if c.get("status") == "error"]
             min_days = min(c.get("days_left", 0) for c in ca_certs)
-            checks.append({"id": "ca_certs", "label": "CA Certificates Valid",
-                           "status": "pass" if ca_ok else "warn",
-                           "detail": f"Shortest: {min_days}d (kubeadm won't renew CAs)"})
+            if ca_expired:
+                # CA expired IS a real blocker — kubeadm certs renew won't fix this
+                checks.append({"id": "ca_certs", "label": "CA Certificates Valid",
+                               "status": "fail",
+                               "detail": f"CA EXPIRED — kubeadm cannot renew CAs, manual rotation required"})
+            else:
+                checks.append({"id": "ca_certs", "label": "CA Certificates Valid",
+                               "status": "pass",
+                               "detail": f"Shortest: {min_days}d (kubeadm won't renew CAs)"})
 
         # 14-16. Node-level prechecks from CronJob
         for cpc in cm_prechecks:
@@ -2867,19 +2868,88 @@ async def cert_prechecks():
                        "status": "warn",
                        "detail": "cert-checker CronJob has not run yet — deploy and wait for first scan"})
 
-    all_pass = all(c["status"] == "pass" for c in checks)
+    # info/warn/skip/pass do NOT block renewal — only "fail" blocks
     any_fail = any(c["status"] == "fail" for c in checks)
+    all_good = not any_fail
     logger.info(f"[cert-prechecks] done: {len(checks)} checks, "
                 f"pass={sum(1 for c in checks if c['status']=='pass')}, "
+                f"info={sum(1 for c in checks if c['status']=='info')}, "
                 f"fail={sum(1 for c in checks if c['status']=='fail')}")
     return {
         "checks": checks,
-        "all_pass": all_pass,
+        "all_pass": all_good,
         "any_fail": any_fail,
-        "can_renew": all_pass or not any_fail,
+        "can_renew": all_good,
         "renewal_command": "sudo kubeadm certs renew all",
         "dry_run": True,
     }
+
+
+@app.post("/api/cert-refresh-scan")
+async def cert_refresh_scan():
+    """Trigger a fresh cert-checker CronJob run and wait for it to complete.
+    Creates a one-off Job from the CronJob, waits for completion, returns fresh ConfigMap data."""
+    import json as _json
+    logger.info("[cert-refresh-scan] START")
+    from kubernetes import client as k8s_client
+
+    batch = k8s_client.BatchV1Api()
+    core, _, _ = _get_k8s()
+
+    job_name = f"cert-scan-{int(time.time())}"
+
+    # Read the CronJob to get its job template
+    try:
+        cronjob = batch.read_namespaced_cron_job("healthwatch-cert-checker", K8S_NAMESPACE)
+    except Exception as e:
+        logger.error(f"[cert-refresh-scan] CronJob not found: {e}")
+        return {"status": "error", "detail": f"CronJob not found: {e}"}
+
+    # Create a one-off Job from the CronJob template
+    job_template = cronjob.spec.job_template
+    job = k8s_client.V1Job(
+        metadata=k8s_client.V1ObjectMeta(
+            name=job_name,
+            namespace=K8S_NAMESPACE,
+            labels={"app.kubernetes.io/component": "cert-checker", "triggered-by": "healthwatch"},
+        ),
+        spec=job_template.spec,
+    )
+
+    try:
+        batch.create_namespaced_job(K8S_NAMESPACE, job)
+        logger.info(f"[cert-refresh-scan] Created job {job_name}")
+    except Exception as e:
+        logger.error(f"[cert-refresh-scan] Failed to create job: {e}")
+        return {"status": "error", "detail": f"Failed to create job: {e}"}
+
+    # Wait for job completion (poll every 3s, max 120s)
+    max_wait = 120
+    elapsed = 0
+    while elapsed < max_wait:
+        await asyncio.sleep(3)
+        elapsed += 3
+        try:
+            job_status = batch.read_namespaced_job_status(job_name, K8S_NAMESPACE)
+            if job_status.status.succeeded and job_status.status.succeeded >= 1:
+                logger.info(f"[cert-refresh-scan] Job {job_name} completed in {elapsed}s")
+                break
+            if job_status.status.failed and job_status.status.failed >= 2:
+                logger.error(f"[cert-refresh-scan] Job {job_name} failed")
+                return {"status": "error", "detail": "Cert scan job failed — check pod logs"}
+        except Exception as e:
+            logger.warning(f"[cert-refresh-scan] Polling error: {e}")
+
+    if elapsed >= max_wait:
+        return {"status": "error", "detail": f"Job did not complete within {max_wait}s"}
+
+    # Read fresh ConfigMap
+    cm_data = _read_cert_configmap()
+    if cm_data:
+        logger.info(f"[cert-refresh-scan] Fresh data: {cm_data.get('timestamp', '?')}")
+        return {"status": "ok", "timestamp": cm_data.get("timestamp", ""), "data": cm_data}
+    else:
+        return {"status": "error", "detail": "Job completed but ConfigMap not updated"}
 
 
 @app.post("/api/cert-postchecks")
