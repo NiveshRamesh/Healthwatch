@@ -2668,8 +2668,10 @@ async def cert_prechecks():
 
     # 1. API Server reachable
     try:
+        from kubernetes import client as k8s_client
         core, _, _ = _get_k8s()
-        core.get_api_versions()
+        version_api = k8s_client.VersionApi()
+        version_api.get_code()
         checks.append({"id": "api_reachable", "label": "API Server Reachable", "status": "pass", "detail": "Cluster API responding"})
     except Exception as e:
         checks.append({"id": "api_reachable", "label": "API Server Reachable", "status": "fail", "detail": str(e)})
@@ -2746,7 +2748,7 @@ async def cert_prechecks():
                     raise RuntimeError("No certificate returned")
                 cert_obj = x509_mod.load_der_x509_certificate(der_bytes)
                 expiry = cert_obj.not_valid_after_utc
-                days_left = (expiry - dt.now(timezone)).days
+                days_left = (expiry - dt.now(timezone.utc)).days
                 if days_left <= 0:
                     checks.append({"id": "cert_expiry", "label": "API Server Certificate Valid", "status": "fail",
                                    "detail": f"EXPIRED ({expiry.strftime('%Y-%m-%d')})"})
@@ -2788,7 +2790,7 @@ async def cert_prechecks():
         try:
             from datetime import datetime as dt2
             scanned = dt2.fromisoformat(cm_timestamp.replace("Z", "+00:00"))
-            age_hours = (dt.now(timezone) - scanned).total_seconds() / 3600
+            age_hours = (dt.now(timezone.utc) - scanned).total_seconds() / 3600
             if age_hours <= 12:
                 checks.append({"id": "cm_fresh", "label": "Cert Scan Data Fresh",
                                "status": "pass", "detail": f"Scanned {age_hours:.1f}h ago"})
@@ -2892,7 +2894,9 @@ async def cert_postchecks():
 
         # 1. API server responding
         try:
-            core.get_api_versions()
+            from kubernetes import client as k8s_client
+            version_api = k8s_client.VersionApi()
+            version_api.get_code()
             checks.append({"id": "api_alive", "label": "API Server Responding", "status": "pass",
                            "detail": "Cluster API responding after renewal"})
         except Exception as e:
@@ -2989,7 +2993,7 @@ async def cert_postchecks():
         # 7. Recent warning events in kube-system
         try:
             events = core.list_namespaced_event("kube-system").items
-            now = dt.now(timezone)
+            now = dt.now(timezone.utc)
             recent_warns = [
                 e for e in events
                 if e.type == "Warning"
