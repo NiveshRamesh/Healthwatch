@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Badge, Tip } from './Shared';
 
-const BASE = '';
+const BASE = '/healthwatch';
 
 /* ── Status strip ────────────────────────────────────────────────── */
 function StatusStrip({ checks }) {
