@@ -2227,7 +2227,7 @@ async def run_all_checks():
 # ═══════════════════════════════════════════════════════════════════════════════
 # APP
 # ═══════════════════════════════════════════════════════════════════════════════
-app = FastAPI(title="HealthWatch Phase 2", root_path="/healthwatch")
+app = FastAPI(title="HealthWatch Phase 2")
 BUILD_DIR = Path(__file__).parent.parent / "frontend"
 
 app.add_middleware(
