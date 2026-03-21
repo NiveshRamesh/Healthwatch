@@ -287,6 +287,239 @@ export default function KubernetesPanel({ checks }) {
           </div>
         </>
       )}
+
+      {/* Pod Connectivity */}
+      <ConnectivitySection data={checks.__connectivity__} />
+
+      {/* Images & Crash Logs */}
+      <ImagesCrashSection data={checks.__images_crashes__} />
     </>
+  );
+}
+
+/* ── Pod Connectivity Section ────────────────────────────────────── */
+function ConnectivitySection({ data }) {
+  const [open, setOpen] = useState(false);
+  if (!data || !data.pods) return null;
+
+  const pods = data.pods || [];
+  const failedPods = pods.filter(p => p.status === 'error');
+  const okPods = pods.filter(p => p.status === 'ok');
+
+  return (
+    <>
+      <GroupDivider label="Pod Connectivity" />
+      <div style={{ margin: '0 16px 16px', borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' }}>
+        <div onClick={() => setOpen(o => !o)} style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '10px 16px', cursor: 'pointer', background: 'rgba(0,212,170,0.03)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: '1rem' }}>🔗</span>
+            <span style={{ fontSize: '0.78rem', fontWeight: 600 }}>{pods.length} Pod Groups</span>
+            {failedPods.length > 0 && <Chip n={failedPods.length} color="239,68,68" label="issues" />}
+            {failedPods.length === 0 && <Chip n={okPods.length} color="16,185,129" label="all ok" />}
+          </div>
+          <span style={{ color: 'var(--muted)', fontSize: '0.6rem', transition: 'transform 0.25s',
+                         transform: open ? 'rotate(180deg)' : 'none' }}>▼</span>
+        </div>
+        {open && (
+          <div style={{ padding: '8px 12px', animation: 'fadeIn 0.2s ease' }}>
+            {/* Show failed pods first */}
+            {[...failedPods, ...okPods].map(pod => (
+              <ConnectivityPod key={pod.pod_prefix} pod={pod} />
+            ))}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function ConnectivityPod({ pod }) {
+  const [expanded, setExpanded] = useState(pod.status === 'error');
+  const failed = pod.connections.filter(c => c.status === 'error');
+  const ok = pod.connections.filter(c => c.status === 'ok');
+  const isOk = pod.status === 'ok';
+
+  return (
+    <div style={{ marginBottom: 6, borderRadius: 8, border: `1px solid ${isOk ? 'var(--border)' : 'rgba(239,68,68,0.25)'}`,
+                  background: isOk ? 'transparent' : 'rgba(239,68,68,0.03)' }}>
+      <div onClick={() => setExpanded(e => !e)} style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '8px 12px', cursor: 'pointer',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+          <span style={{ fontSize: '0.7rem' }}>{isOk ? '🟢' : '🔴'}</span>
+          <span style={{ fontSize: '0.7rem', fontWeight: 600, fontFamily: 'var(--mono)', color: 'var(--text)',
+                         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {pod.actual_pod}
+          </span>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: '0.58rem', fontFamily: 'var(--mono)', color: 'var(--muted)' }}>
+            {ok.length}/{pod.connections.length} ok
+          </span>
+          {failed.length > 0 && (
+            <span style={{ fontSize: '0.55rem', fontWeight: 700, padding: '1px 5px', borderRadius: 3,
+                           background: 'rgba(239,68,68,0.12)', color: 'var(--error)', fontFamily: 'var(--mono)' }}>
+              {failed.length} FAIL
+            </span>
+          )}
+          <span style={{ color: 'var(--muted)', fontSize: '0.55rem', transform: expanded ? 'rotate(180deg)' : 'none',
+                         transition: 'transform 0.2s' }}>▼</span>
+        </div>
+      </div>
+      {expanded && (
+        <div style={{ padding: '0 12px 8px', display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          {pod.connections.map(c => {
+            const ok = c.status === 'ok';
+            return (
+              <span key={c.service} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 4,
+                padding: '3px 8px', borderRadius: 4, fontSize: '0.58rem', fontFamily: 'var(--mono)',
+                background: ok ? 'rgba(16,185,129,0.08)' : 'rgba(239,68,68,0.08)',
+                border: `1px solid ${ok ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}`,
+                color: ok ? 'var(--ok)' : 'var(--error)',
+              }}>
+                <span style={{ fontSize: '0.55rem' }}>{ok ? '✓' : '✕'}</span>
+                {c.service}
+                <span style={{ color: 'var(--muted)', fontSize: '0.5rem' }}>{c.detail}</span>
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Images & Crash Logs Section ─────────────────────────────────── */
+function ImagesCrashSection({ data }) {
+  const [imagesOpen, setImagesOpen] = useState(false);
+  const [crashOpen, setCrashOpen] = useState(false);
+  if (!data) return null;
+
+  const images = data.image_summary || [];
+  const crashPods = data.crash_pods || [];
+  const allPods = data.pods || [];
+
+  return (
+    <>
+      {/* Image Tags */}
+      {images.length > 0 && (
+        <>
+          <GroupDivider label="Container Images" />
+          <div style={{ margin: '0 16px 16px', borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' }}>
+            <div onClick={() => setImagesOpen(o => !o)} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '10px 16px', cursor: 'pointer', background: 'rgba(0,212,170,0.03)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: '1rem' }}>🏷️</span>
+                <span style={{ fontSize: '0.78rem', fontWeight: 600 }}>{images.length} Images</span>
+              </div>
+              <span style={{ color: 'var(--muted)', fontSize: '0.6rem', transition: 'transform 0.25s',
+                             transform: imagesOpen ? 'rotate(180deg)' : 'none' }}>▼</span>
+            </div>
+            {imagesOpen && (
+              <div style={{ padding: '4px 0', animation: 'fadeIn 0.2s ease' }}>
+                {images.map((img, i) => (
+                  <div key={img.image} style={{
+                    display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) 80px 40px',
+                    gap: 8, padding: '6px 16px', alignItems: 'center',
+                    background: i % 2 === 0 ? 'transparent' : 'rgba(0,212,170,0.02)',
+                    borderBottom: '1px solid var(--border)',
+                  }}>
+                    <span style={{ fontSize: '0.62rem', fontFamily: 'var(--mono)', color: 'var(--text)',
+                                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {img.image}
+                    </span>
+                    <span style={{ fontSize: '0.58rem', fontFamily: 'var(--mono)', fontWeight: 700,
+                                   padding: '2px 6px', borderRadius: 4,
+                                   background: 'rgba(0,153,255,0.1)', color: 'var(--accent2)', textAlign: 'center' }}>
+                      {img.tag}
+                    </span>
+                    <span style={{ fontSize: '0.58rem', fontFamily: 'var(--mono)', color: 'var(--muted)', textAlign: 'center' }}>
+                      {img.count}x
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Crash Logs */}
+      {crashPods.length > 0 && (
+        <>
+          <GroupDivider label="Crash Logs" />
+          <div style={{ margin: '0 16px 16px', borderRadius: 10, overflow: 'hidden', border: '1px solid rgba(239,68,68,0.25)' }}>
+            <div onClick={() => setCrashOpen(o => !o)} style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              padding: '10px 16px', cursor: 'pointer', background: 'rgba(239,68,68,0.04)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: '1rem' }}>💥</span>
+                <span style={{ fontSize: '0.78rem', fontWeight: 600 }}>{crashPods.length} Containers with Restarts</span>
+              </div>
+              <span style={{ color: 'var(--muted)', fontSize: '0.6rem', transition: 'transform 0.25s',
+                             transform: crashOpen ? 'rotate(180deg)' : 'none' }}>▼</span>
+            </div>
+            {crashOpen && (
+              <div style={{ padding: '4px 0', animation: 'fadeIn 0.2s ease' }}>
+                {crashPods.map((cp, i) => (
+                  <CrashPodRow key={`${cp.pod}-${cp.container}-${i}`} crash={cp} allPods={allPods} />
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function CrashPodRow({ crash, allPods }) {
+  const [logsOpen, setLogsOpen] = useState(false);
+  const podData = allPods.find(p => p.name === crash.pod);
+  const crashLog = podData?.crash_logs?.find(cl => cl.container === crash.container);
+  const lastLines = crashLog?.last_lines || [];
+
+  return (
+    <div style={{ borderBottom: '1px solid var(--border)' }}>
+      <div onClick={() => setLogsOpen(o => !o)} style={{
+        display: 'grid', gridTemplateColumns: 'minmax(0, 1.5fr) minmax(0, 1fr) 60px minmax(0, 2fr)',
+        gap: 8, padding: '8px 16px', cursor: 'pointer', alignItems: 'center',
+      }}>
+        <span style={{ fontSize: '0.62rem', fontFamily: 'var(--mono)', color: 'var(--text)',
+                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {crash.pod}
+        </span>
+        <span style={{ fontSize: '0.58rem', fontFamily: 'var(--mono)', color: 'var(--muted)' }}>
+          {crash.container}
+        </span>
+        <span style={{ fontSize: '0.62rem', fontWeight: 700, fontFamily: 'var(--mono)',
+                       color: crash.restarts > 10 ? 'var(--error)' : 'var(--warn)' }}>
+          {crash.restarts}x
+        </span>
+        <span style={{ fontSize: '0.58rem', fontFamily: 'var(--mono)', color: 'var(--error)',
+                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {crash.crash_reason || 'Unknown'}
+        </span>
+      </div>
+      {logsOpen && lastLines.length > 0 && (
+        <div style={{ margin: '0 16px 8px', padding: '8px 10px', borderRadius: 6,
+                      background: 'rgba(0,0,0,0.3)', maxHeight: 200, overflowY: 'auto' }}>
+          {lastLines.map((line, i) => (
+            <div key={i} style={{
+              fontSize: '0.55rem', fontFamily: 'var(--mono)', color: 'var(--muted)',
+              lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+            }}>{line}</div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

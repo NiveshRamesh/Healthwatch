@@ -2078,6 +2078,343 @@ async def check_kubernetes_pods() -> dict:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# POD CONNECTIVITY, IMAGE TAGS, CRASH LOGS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── Service connectivity map ─────────────────────────────────────────────────
+CH_URL       = f"http://{CLICKHOUSE_HOST}:{CLICKHOUSE_PORT}/ping"
+PG_URL       = f"http://{POSTGRES_HOST}:{POSTGRES_PORT}"
+KAFKA_URL    = "http://broker.vsmaps.svc.cluster.local:9092"
+ZK_URL       = "http://kafka-cluster-cp-zookeeper.vsmaps.svc.cluster.local:2181"
+MINIO_URL    = f"{MINIO_ENDPOINT}/minio/health/live"
+KEYCLOAK_URL = "http://keycloak.vsmaps.svc.cluster.local:8080"
+NAIROBI_URL  = "http://nairobi.vsmaps.svc.cluster.local:3000"
+DENVER_URL   = "http://denver.vsmaps.svc.cluster.local:8882"
+DAO_URL      = "http://dao.vsmaps.svc.cluster.local:50051"
+ALERT_URL    = "http://alert.vsmaps.svc.cluster.local:50052"
+RENDERER_URL = "http://renderer.vsmaps.svc.cluster.local:8081"
+REPORTER_URL = "http://reporter.vsmaps.svc.cluster.local:8686"
+ORCH_URL     = "http://orch-webhook.vsmaps.svc.cluster.local:8080"
+KEEPER_URL   = "http://clickhouse-keeper.vsmaps.svc.cluster.local:2181"
+
+POD_DEPENDENCIES = {
+    "denver-denver": [
+        ("ClickHouse", CH_URL,       "http"),
+        ("PostgreSQL", PG_URL,       "tcp"),
+        ("Kafka",      KAFKA_URL,    "tcp"),
+    ],
+    "dao": [
+        ("PostgreSQL", PG_URL,       "tcp"),
+        ("ClickHouse", CH_URL,       "http"),
+        ("Kafka",      KAFKA_URL,    "tcp"),
+        ("Denver",     DENVER_URL,   "tcp"),
+        ("Alert",      ALERT_URL,    "tcp"),
+        ("Nairobi",    NAIROBI_URL,  "tcp"),
+        ("Reporter",   REPORTER_URL, "tcp"),
+        ("Renderer",   RENDERER_URL, "tcp"),
+    ],
+    "alert": [
+        ("ClickHouse", CH_URL,       "http"),
+        ("Kafka",      KAFKA_URL,    "tcp"),
+        ("PostgreSQL", PG_URL,       "tcp"),
+        ("Nairobi",    NAIROBI_URL,  "tcp"),
+        ("Reporter",   REPORTER_URL, "tcp"),
+    ],
+    "vuinterface-cairo": [
+        ("Denver",     DENVER_URL,   "tcp"),
+        ("DAO",        DAO_URL,      "tcp"),
+        ("Alert",      ALERT_URL,    "tcp"),
+        ("Nairobi",    NAIROBI_URL,  "tcp"),
+        ("Keycloak",   KEYCLOAK_URL, "tcp"),
+        ("ClickHouse", CH_URL,       "http"),
+        ("PostgreSQL", PG_URL,       "tcp"),
+        ("MinIO",      MINIO_URL,    "http"),
+        ("Renderer",   RENDERER_URL, "tcp"),
+        ("Reporter",   REPORTER_URL, "tcp"),
+    ],
+    "nairobi": [
+        ("PostgreSQL", PG_URL,       "tcp"),
+        ("Renderer",   RENDERER_URL, "tcp"),
+        ("Keycloak",   KEYCLOAK_URL, "tcp"),
+    ],
+    "renderer": [
+        ("Nairobi",    NAIROBI_URL,  "tcp"),
+        ("Reporter",   REPORTER_URL, "tcp"),
+    ],
+    "reporter": [
+        ("ClickHouse", CH_URL,       "http"),
+        ("PostgreSQL", PG_URL,       "tcp"),
+        ("Nairobi",    NAIROBI_URL,  "tcp"),
+        ("Renderer",   RENDERER_URL, "tcp"),
+        ("Denver",     DENVER_URL,   "tcp"),
+    ],
+    "keycloak-deployment": [
+        ("PostgreSQL", "http://timescaledb-1.vsmaps.svc.cluster.local:5432", "tcp"),
+    ],
+    "kafka-cluster-cp-kafka-0": [
+        ("Zookeeper",  ZK_URL,       "tcp"),
+    ],
+    "kafka-cluster-cp-kafka-connect": [
+        ("Kafka",      KAFKA_URL,    "tcp"),
+        ("ClickHouse", CH_URL,       "http"),
+    ],
+    "enrichment-preprocessor": [
+        ("Kafka",      KAFKA_URL,    "tcp"),
+        ("ClickHouse", CH_URL,       "http"),
+    ],
+    "linuxmonitor": [
+        ("Kafka",      KAFKA_URL,    "tcp"),
+        ("ClickHouse", CH_URL,       "http"),
+    ],
+    "telegraf-vusmart": [
+        ("ClickHouse", CH_URL,       "http"),
+    ],
+    "telegraf-infra": [
+        ("ClickHouse", CH_URL,       "http"),
+    ],
+    "minio-tenant": [
+        ("Orchestration", ORCH_URL,  "tcp"),
+    ],
+    "orchestration": [
+        ("MinIO",      MINIO_URL,    "http"),
+        ("DAO",        DAO_URL,      "tcp"),
+        ("Kafka",      KAFKA_URL,    "tcp"),
+        ("PostgreSQL", PG_URL,       "tcp"),
+    ],
+    "chi-clickhouse-vusmart": [
+        ("CH Keeper",  KEEPER_URL,   "tcp"),
+        ("MinIO",      MINIO_URL,    "http"),
+    ],
+    "vublock-store": [
+        ("MinIO",      MINIO_URL,    "http"),
+        ("Nairobi",    NAIROBI_URL,  "tcp"),
+    ],
+}
+
+CRASH_LOG_LINES = int(os.getenv("CRASH_LOG_LINES", "50"))
+
+
+def _test_endpoint(pod_prefix, svc_name, url, protocol):
+    """Test single endpoint reachability via socket (TCP) or httpx (HTTP)."""
+    import socket as _socket
+    try:
+        # Parse host:port from URL
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        if protocol == "http":
+            import httpx
+            try:
+                resp = httpx.get(url, timeout=5, follow_redirects=False)
+                return {"service": svc_name, "url": url, "status": "ok",
+                        "detail": f"HTTP {resp.status_code}", "reachable": True}
+            except httpx.ConnectError:
+                return {"service": svc_name, "url": url, "status": "error",
+                        "detail": "connection refused", "reachable": False}
+            except httpx.TimeoutException:
+                return {"service": svc_name, "url": url, "status": "error",
+                        "detail": "timeout", "reachable": False}
+            except Exception as e:
+                return {"service": svc_name, "url": url, "status": "error",
+                        "detail": str(e)[:100], "reachable": False}
+        else:
+            # TCP port check
+            sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+            sock.settimeout(3)
+            try:
+                sock.connect((host, port))
+                sock.close()
+                return {"service": svc_name, "url": url, "status": "ok",
+                        "detail": "port open", "reachable": True}
+            except (_socket.timeout, ConnectionRefusedError, OSError) as e:
+                return {"service": svc_name, "url": url, "status": "error",
+                        "detail": str(e)[:100], "reachable": False}
+            finally:
+                sock.close()
+    except Exception as e:
+        return {"service": svc_name, "url": url, "status": "error",
+                "detail": str(e)[:100], "reachable": False}
+
+
+async def check_pod_connectivity() -> dict:
+    """Test TCP/HTTP reachability of each pod's service dependencies."""
+    t0 = time.time()
+    logger.info(f"[pod_connectivity] START — {len(POD_DEPENDENCIES)} pod dependency groups")
+    import concurrent.futures
+
+    # Match running pods to dependency map
+    try:
+        core, _, _ = _get_k8s()
+        running_pods = core.list_namespaced_pod(namespace=K8S_NAMESPACE).items
+        running_names = [p.metadata.name for p in running_pods if p.status.phase == "Running"]
+    except Exception as e:
+        logger.error(f"[pod_connectivity] failed to list pods: {e}")
+        running_names = []
+
+    matched = {}
+    for prefix in POD_DEPENDENCIES:
+        for pname in running_names:
+            if pname.startswith(prefix):
+                matched[prefix] = pname
+                break
+
+    logger.info(f"[pod_connectivity] matched {len(matched)}/{len(POD_DEPENDENCIES)} prefixes")
+
+    results = {}
+    loop = asyncio.get_event_loop()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
+        futures = {}
+        for pod_prefix, deps in POD_DEPENDENCIES.items():
+            for svc_name, url, protocol in deps:
+                key = (pod_prefix, svc_name, url, protocol)
+                futures[key] = loop.run_in_executor(
+                    pool, lambda k=key: _test_endpoint(*k))
+
+        for (pod_prefix, svc_name, url, protocol), fut in futures.items():
+            result = await fut
+            actual_pod = matched.get(pod_prefix, pod_prefix)
+            if pod_prefix not in results:
+                results[pod_prefix] = {
+                    "pod_prefix": pod_prefix,
+                    "actual_pod": actual_pod,
+                    "connections": [],
+                    "status": "ok",
+                }
+            results[pod_prefix]["connections"].append(result)
+            if result["status"] == "error":
+                results[pod_prefix]["status"] = "error"
+                logger.warning(f"[pod_connectivity] {actual_pod} -> "
+                               f"{svc_name} UNREACHABLE ({url})")
+
+    pod_list = list(results.values())
+    failed = [p["actual_pod"] for p in pod_list if p["status"] == "error"]
+    overall = "error" if failed else "ok"
+    logger.info(f"[pod_connectivity] overall={overall} tested={len(pod_list)} failed={failed}")
+    _timed("pod_connectivity", t0)
+    return {
+        "pods": pod_list,
+        "failed": failed,
+        "status": overall,
+        "detail": (f"{len(failed)} pods with connectivity issues"
+                   if failed else
+                   f"All {len(pod_list)} service dependency checks passed"),
+    }
+
+
+async def check_pod_images_and_crashes() -> dict:
+    """For every pod: capture image tags, and for pods with restarts fetch previous logs."""
+    t0 = time.time()
+    logger.info(f"[pod_images_crashes] START ns={K8S_NAMESPACE}")
+    try:
+        core, _, _ = _get_k8s()
+        pods = core.list_namespaced_pod(namespace=K8S_NAMESPACE).items
+        logger.info(f"[pod_images_crashes] {len(pods)} pods found")
+
+        pod_data = []
+        image_summary = {}
+        crash_pods = []
+
+        for pod in pods:
+            pname = pod.metadata.name
+            phase = pod.status.phase or "Unknown"
+
+            # ── Image tags ──────────────────────────────────────────────────
+            containers = []
+            for c in pod.spec.containers:
+                image = c.image or ""
+                tag = image.split(":")[-1] if ":" in image else "latest"
+                registry = image.split("/")[0] if "/" in image else "docker.io"
+                img_name = image.split("/")[-1].split(":")[0] if "/" in image else image.split(":")[0]
+                containers.append({
+                    "container": c.name, "image": image,
+                    "tag": tag, "registry": registry, "img_name": img_name,
+                })
+                if image not in image_summary:
+                    image_summary[image] = []
+                image_summary[image].append(pname)
+
+            # ── Restart count + crash logs ───────────────────────────────────
+            total_restarts = 0
+            crash_logs = []
+
+            for cs in (pod.status.container_statuses or []):
+                restarts = cs.restart_count or 0
+                total_restarts += restarts
+
+                if restarts > 0:
+                    logger.info(f"[pod_images_crashes] pod={pname} "
+                                f"container={cs.name} restarts={restarts}")
+                    try:
+                        prev_logs = core.read_namespaced_pod_log(
+                            name=pname, namespace=K8S_NAMESPACE,
+                            container=cs.name, previous=True,
+                            tail_lines=CRASH_LOG_LINES,
+                        )
+                        lines = prev_logs.strip().splitlines() if prev_logs else []
+                        crash_reason = ""
+                        for line in reversed(lines):
+                            low = line.lower()
+                            if any(k in low for k in ["error", "exception", "fatal",
+                                                       "critical", "traceback", "panic",
+                                                       "killed", "oom"]):
+                                crash_reason = line.strip()[:300]
+                                break
+                        last_line = lines[-1].strip()[:300] if lines else ""
+                        crash_logs.append({
+                            "container": cs.name, "restarts": restarts,
+                            "crash_reason": crash_reason or last_line,
+                            "last_lines": lines[-10:], "total_lines": len(lines),
+                        })
+                        crash_pods.append({
+                            "pod": pname, "container": cs.name,
+                            "restarts": restarts,
+                            "crash_reason": crash_reason or last_line,
+                        })
+                    except Exception as le:
+                        logger.warning(f"[pod_images_crashes] prev logs failed "
+                                       f"{pname}/{cs.name}: {le}")
+                        crash_logs.append({
+                            "container": cs.name, "restarts": restarts,
+                            "crash_reason": "Previous logs not available",
+                            "last_lines": [], "total_lines": 0,
+                        })
+
+            pod_data.append({
+                "name": pname, "phase": phase, "containers": containers,
+                "total_restarts": total_restarts, "crash_logs": crash_logs,
+                "has_crashes": len(crash_logs) > 0,
+            })
+
+        crash_pods.sort(key=lambda x: x["restarts"], reverse=True)
+        images = [{"image": img, "tag": img.split(":")[-1] if ":" in img else "latest",
+                   "pods": pods_using, "count": len(pods_using)}
+                  for img, pods_using in sorted(image_summary.items())]
+
+        overall = ("critical" if any(p["restarts"] > 100 for p in crash_pods) else
+                   "warn" if any(p["restarts"] > 0 for p in crash_pods) else "ok")
+
+        _timed("pod_images_crashes", t0)
+        return {
+            "pods": pod_data,
+            "image_summary": images,
+            "crash_pods": crash_pods,
+            "total_pods": len(pod_data),
+            "pods_with_crashes": len({c["pod"] for c in crash_pods}),
+            "status": overall,
+            "detail": (f"{len(crash_pods)} containers with restarts — "
+                       f"top: {crash_pods[0]['pod']} ({crash_pods[0]['restarts']} restarts)"
+                       if crash_pods else f"{len(pod_data)} pods · no restarts"),
+        }
+    except Exception as e:
+        logger.error(f"[pod_images_crashes] EXCEPTION: {e}\n{traceback.format_exc()}")
+        _timed("pod_images_crashes", t0)
+        return {"pods": [], "image_summary": [], "crash_pods": [],
+                "status": "error", "detail": str(e)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # AGGREGATE RUNNER
 # ═══════════════════════════════════════════════════════════════════════════════
 async def run_all_checks():
@@ -2102,6 +2439,8 @@ async def run_all_checks():
             check_kubernetes_resources(),
             check_data_retention(),
             check_k8s_certs(),
+            check_pod_connectivity(),
+            check_pod_images_and_crashes(),
             return_exceptions=True,
         )
         names = [
@@ -2115,6 +2454,8 @@ async def run_all_checks():
             "k8s_resources",
             "data_retention",
             "k8s_certs",
+            "pod_connectivity",
+            "pod_images_crashes",
         ]
         for name, r in zip(names, results):
             if isinstance(r, Exception):
@@ -2140,6 +2481,8 @@ async def run_all_checks():
             k8s_resources,
             data_retention,
             k8s_certs,
+            pod_connectivity,
+            pod_images_crashes,
         ) = results
         ch_merged = {**safe(ch_conn, "CH Connection")}
         ch_merged["__ch_tables__"] = safe(ch_tables, "CH Tables")
@@ -2207,6 +2550,8 @@ async def run_all_checks():
             "kubernetes": {
                 **safe(k8s_pods, "K8s Pods"),
                 "__resources__": safe(k8s_resources, "K8s Resources"),
+                "__connectivity__": safe(pod_connectivity, "Pod Connectivity"),
+                "__images_crashes__": safe(pod_images_crashes, "Images & Crashes"),
             },
             "pods_pvcs": {"__pods_pvcs__": safe(pvc_pods, "Pods/PVCs")},
             "data_retention": safe(data_retention, "Data Retention"),
