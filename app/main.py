@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from datetime import datetime
-import asyncio, os, logging, traceback, time, ssl, socket
+import asyncio, os, logging, traceback, time, ssl, socket, json
 from pathlib import Path
 
 # ─── Logging setup ───────────────────────────────────────────────────────────
@@ -4004,6 +4004,129 @@ async def backup_download(backup_name: str):
         media_type="application/gzip",
         filename=f"{clean_name}.tar.gz",
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AI-POWERED RCA ANALYSIS (Gemini API)
+# ═══════════════════════════════════════════════════════════════════════════════
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+
+ANALYZE_SYSTEM_PROMPT = """You are an expert SRE engineer for VuSmart, a monitoring and observability platform running on Kubernetes.
+
+Infrastructure stack:
+- Kubernetes (single-node or multi-node clusters, namespace: vsmaps)
+- ClickHouse (columnar DB for metrics/logs, cluster: vusmart, keeper for coordination)
+- Kafka (CP Kafka with Zookeeper, enrichment connectors, consumer groups)
+- PostgreSQL (via TimescaleDB service, databases: multicore, keycloak, vugrafana)
+- MinIO (object storage for configs, dashboards, archives)
+- Keycloak (SSO/auth), Nairobi (Grafana fork), Denver (data engine), DAO (data access)
+
+You are analyzing a FAILED or WARNING health check. Provide actionable RCA.
+
+IMPORTANT: Return ONLY valid JSON with this exact structure (no markdown, no code blocks):
+{
+  "rca": "One paragraph root cause analysis",
+  "likely_causes": ["cause 1", "cause 2", "cause 3"],
+  "impact": "What is affected and how severely",
+  "severity": "critical|high|medium|low",
+  "estimated_recovery_time": "e.g. 5-10 minutes",
+  "investigation_steps": [
+    {"description": "Step description", "command": "kubectl command or SQL query"}
+  ],
+  "fix_commands": [
+    {"description": "What this fixes", "command": "the command to run", "warning": "optional caution"}
+  ],
+  "relevant_logs": [
+    {"description": "Where to look", "command": "kubectl logs command or file path"}
+  ]
+}"""
+
+
+@app.post("/api/analyze")
+async def analyze_check(request: Request):
+    """AI-powered RCA analysis using Gemini API."""
+    if not GEMINI_API_KEY:
+        return {"error": "GEMINI_API_KEY not configured. Add it to Helm secrets or environment."}
+
+    body = await request.json()
+    check_name = body.get("check_name", "Unknown")
+    section = body.get("section", "")
+    status = body.get("status", "error")
+    detail = body.get("detail", "")
+    data = body.get("data", {})
+
+    # Build context for the AI
+    data_str = json.dumps(data, default=str)[:3000] if data else "{}"
+    user_message = (
+        f"Health check FAILED:\n"
+        f"Section: {section}\n"
+        f"Check: {check_name}\n"
+        f"Status: {status}\n"
+        f"Detail: {detail}\n"
+        f"Data: {data_str}\n\n"
+        f"Analyze this failure and provide RCA with investigation steps and fix commands."
+    )
+
+    logger.info(f"[analyze] START check={check_name} section={section} status={status}")
+
+    try:
+        import httpx
+        import json as _json
+
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": ANALYZE_SYSTEM_PROMPT + "\n\n" + user_message}
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.3,
+                "maxOutputTokens": 2048,
+                "responseMimeType": "application/json",
+            },
+        }
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(url, json=payload)
+
+        if resp.status_code != 200:
+            logger.error(f"[analyze] Gemini API error: {resp.status_code} {resp.text[:300]}")
+            return {"error": f"Gemini API returned {resp.status_code}: {resp.text[:200]}"}
+
+        result = resp.json()
+        # Extract text from Gemini response
+        candidates = result.get("candidates", [])
+        if not candidates:
+            return {"error": "No response from Gemini"}
+
+        text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+
+        # Parse JSON response
+        try:
+            analysis = _json.loads(text)
+        except _json.JSONDecodeError:
+            # Try to extract JSON from markdown code blocks
+            import re
+            json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
+            if json_match:
+                analysis = _json.loads(json_match.group(1))
+            else:
+                # Return raw text as RCA
+                analysis = {"rca": text, "likely_causes": [], "investigation_steps": [],
+                            "fix_commands": [], "relevant_logs": [],
+                            "severity": "medium", "impact": "See analysis above"}
+
+        logger.info(f"[analyze] OK severity={analysis.get('severity', '?')}")
+        return analysis
+
+    except Exception as e:
+        logger.error(f"[analyze] EXCEPTION: {e}\n{traceback.format_exc()}")
+        return {"error": str(e)}
 
 
 @app.get("/api/health")

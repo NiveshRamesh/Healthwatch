@@ -49,6 +49,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "healthwatch.fullname" . }}-secrets
                   key: POSTGRES_PASSWORD
+            - name: GEMINI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "healthwatch.fullname" . }}-secrets
+                  key: GEMINI_API_KEY
             - name: MINIO_ACCESS_KEY
               valueFrom:
                 secretKeyRef:

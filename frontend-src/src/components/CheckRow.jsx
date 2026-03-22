@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { DetailTooltip } from './Tooltip';
 import { STATUS_ICONS } from '../utils';
+import AnalyzeModal from './AnalyzeModal';
 
 const rowStyle = {
   display:'flex', alignItems:'center', justifyContent:'space-between',
@@ -32,9 +33,11 @@ function ExpandBtn({ cls, onClick, children }) {
   );
 }
 
-export default function CheckRow({ name, check, details, onRestartClick, onExpandLive, onExpandLag, onInspect }) {
+export default function CheckRow({ name, check, details, onRestartClick, onExpandLive, onExpandLag, onInspect, section }) {
+  const [showAnalyze, setShowAnalyze] = useState(false);
   const { status, detail = '', logs } = check;
   const icon = STATUS_ICONS[status] || '⬜';
+  const canAnalyze = ['error', 'critical', 'warn'].includes(status);
 
   // Extract restart count
   const restartMatch = detail.match(/Restarts:\s*(\d+)/);
@@ -92,10 +95,38 @@ export default function CheckRow({ name, check, details, onRestartClick, onExpan
           </ExpandBtn>
         )}
 
+        {canAnalyze && (
+          <span
+            onClick={() => setShowAnalyze(true)}
+            title="AI-powered RCA and fix suggestions"
+            style={{
+              display:'inline-flex', alignItems:'center', gap:3,
+              fontSize:'0.62rem', fontFamily:'var(--mono)', fontWeight:700,
+              padding:'2px 8px', borderRadius:5, cursor:'pointer',
+              border:'1px solid var(--border)', color:'var(--muted)',
+              background:'transparent', whiteSpace:'nowrap', flexShrink:0,
+              transition:'all 0.15s',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor='var(--accent)'; e.currentTarget.style.color='var(--accent)'; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.color='var(--muted)'; }}
+          >🔍 Analyze</span>
+        )}
+
         <span style={{ fontSize:'1rem', color:`var(--${status === 'ok' ? 'ok' : status === 'warn' ? 'warn' : status === 'error' ? 'error' : 'unknown'})` }}>
           {icon}
         </span>
       </div>
+
+      {showAnalyze && (
+        <AnalyzeModal
+          checkName={name}
+          section={section || ''}
+          status={status}
+          detail={detail}
+          data={check}
+          onClose={() => setShowAnalyze(false)}
+        />
+      )}
     </div>
   );
 }
