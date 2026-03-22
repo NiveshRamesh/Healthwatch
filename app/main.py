@@ -1852,7 +1852,46 @@ async def check_data_retention() -> dict:
                 table_tiers[tbl] = {}
             table_tiers[tbl][disk] = {"parts": parts, "size": size, "size_bytes": size_bytes}
 
-        # ── Step 4: Check each table's actual data age ───────────────────────
+        # ── Step 4: Get cold tier data from MinIO hs-archives ────────────────
+        cold_tier_data = {}  # table_name -> {objects, size_bytes, dates}
+        try:
+            from minio import Minio
+            from urllib.parse import urlparse
+            parsed = urlparse(MINIO_ENDPOINT)
+            minio_host = parsed.hostname
+            minio_port = parsed.port or 9000
+            access_key = os.getenv("MINIO_ACCESS_KEY", "minio")
+            secret_key = os.getenv("MINIO_SECRET_KEY", "minio123")
+            mc = Minio(f"{minio_host}:{minio_port}", access_key=access_key,
+                       secret_key=secret_key, secure=False)
+
+            if mc.bucket_exists("hs-archives"):
+                for obj in mc.list_objects("hs-archives", recursive=False):
+                    name = obj.object_name.rstrip("/")
+                    # Pattern: 4::YYYYMMDD::table_name::partition
+                    parts = name.split("::")
+                    if len(parts) >= 3 and parts[0] == "4":
+                        tbl = parts[2] if not parts[2].endswith("_data") else parts[2]
+                        tbl_data = tbl + "_data" if not tbl.endswith("_data") else tbl
+                        if tbl_data not in cold_tier_data:
+                            cold_tier_data[tbl_data] = {"objects": 0, "size_bytes": 0, "dates": set()}
+                        cold_tier_data[tbl_data]["objects"] += 1
+                        cold_tier_data[tbl_data]["size_bytes"] += obj.size or 0
+                        if len(parts) >= 2 and len(parts[1]) == 8:
+                            cold_tier_data[tbl_data]["dates"].add(parts[1])
+                    # Also handle dist pattern: 4::dist::table_prefix::table_data
+                    elif len(parts) >= 4 and parts[1] == "dist":
+                        tbl_data = parts[3] if parts[3].endswith("_data") else parts[3] + "_data"
+                        if tbl_data not in cold_tier_data:
+                            cold_tier_data[tbl_data] = {"objects": 0, "size_bytes": 0, "dates": set()}
+                        cold_tier_data[tbl_data]["objects"] += 1
+                        cold_tier_data[tbl_data]["size_bytes"] += obj.size or 0
+
+                logger.info(f"[data_retention] cold tier: {len(cold_tier_data)} tables in hs-archives")
+        except Exception as ce:
+            logger.warning(f"[data_retention] cold tier check failed: {ce}")
+
+        # ── Step 5: Check each table's actual data age ───────────────────────
         results = []
         warned = []
 
@@ -1892,6 +1931,19 @@ async def check_data_retention() -> dict:
                 hot_info = tiers.get(HOT_DISK)
                 warm_info = tiers.get(WARM_DISK)
 
+                # Cold tier from MinIO hs-archives
+                cold_info = cold_tier_data.get(table)
+                cold_tier = None
+                if cold_info:
+                    cold_bytes = cold_info["size_bytes"]
+                    cold_dates = sorted(cold_info.get("dates", set()))
+                    cold_tier = {
+                        "size": _fmt_bytes(cold_bytes),
+                        "size_bytes": cold_bytes,
+                        "objects": cold_info["objects"],
+                        "dates": cold_dates[:5],  # show up to 5 dates
+                    }
+
                 results.append({
                     "table": table,
                     "min_timestamp": min_ts_str,
@@ -1904,6 +1956,7 @@ async def check_data_retention() -> dict:
                     "status": status,
                     "hot_tier": {"size": hot_info["size"], "size_bytes": hot_info["size_bytes"]} if hot_info else None,
                     "warm_tier": {"size": warm_info["size"], "size_bytes": warm_info["size_bytes"]} if warm_info else None,
+                    "cold_tier": cold_tier,
                 })
 
             except Exception as te:

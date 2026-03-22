@@ -147,6 +147,7 @@ function RetentionCard({ table }) {
         </span>
         <span style={{ fontSize: '0.52rem', color: 'var(--muted)', fontFamily: 'var(--mono)' }}>
           {t.retention_days}d in CH (Hot={t.hot_days}d, Warm={t.warm_days - t.hot_days}d)
+          {t.cold_tier ? ` · Cold: MinIO (${t.cold_tier.objects} obj)` : ''}
         </span>
       </div>
 
@@ -179,6 +180,7 @@ function RetentionCard({ table }) {
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', borderTop: '1px solid var(--border)', paddingTop: 7 }}>
         <TierPill label="HOT" info={t.hot_tier} color="239,147,56" />
         <TierPill label="WARM" info={t.warm_tier} color="59,130,246" />
+        {t.cold_tier && <TierPill label="COLD" info={t.cold_tier} color="139,92,246" />}
       </div>
     </div>
   );
