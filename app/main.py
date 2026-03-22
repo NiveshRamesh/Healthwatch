@@ -3620,7 +3620,8 @@ _backup_state = {"running": False, "progress": {}, "last_result": None}
 
 
 def _backup_postgres(backup_dir: Path) -> dict:
-    """Backup PostgreSQL databases via pg_dump exec into pod."""
+    """Backup PostgreSQL databases via pg_dump exec into pod.
+    Uses base64 encoding for binary-safe transfer of pg_dump custom format."""
     logger.info("[backup:pg] START")
     pg_dir = backup_dir / "postgresql"
     pg_dir.mkdir(parents=True, exist_ok=True)
@@ -3628,14 +3629,17 @@ def _backup_postgres(backup_dir: Path) -> dict:
     results = []
     for db in databases:
         try:
-            # pg_dump to stdout in custom format, capture via exec
+            import base64
+            # pg_dump in custom format, base64 encode for safe transfer through k8s exec
             dump_cmd = (f"PGPASSWORD='{POSTGRES_PASSWORD}' pg_dump "
-                        f"-h localhost -U {POSTGRES_USER} -F c -d {db}")
+                        f"-h localhost -U {POSTGRES_USER} -F c -d {db} | base64")
             output = _sync_exec_pod(PG_POD_NAME, K8S_NAMESPACE, dump_cmd)
+            # Decode base64 back to binary
+            dump_bytes = base64.b64decode(output.strip())
             dump_file = pg_dir / f"{db}.dump"
-            dump_file.write_text(output, errors="surrogateescape")
+            dump_file.write_bytes(dump_bytes)
             size = dump_file.stat().st_size
-            logger.info(f"[backup:pg] {db}: {round(size/1024)}KB")
+            logger.info(f"[backup:pg] {db}: {_fmt_bytes(size)}")
             results.append({"database": db, "status": "ok", "size_bytes": size,
                             "size": _fmt_bytes(size), "file": f"postgresql/{db}.dump"})
         except Exception as e:
@@ -3886,11 +3890,29 @@ def _run_backup():
         }
         (backup_dir / "manifest.json").write_text(_json.dumps(manifest, indent=2, default=str))
 
-        # Cleanup old backups
-        existing = sorted(BACKUP_BASE_DIR.glob("backup-*"), key=lambda p: p.name, reverse=True)
-        for old in existing[BACKUP_MAX_KEEP:]:
-            import shutil
+        # Create tar.gz immediately (not during download — avoids OOM/timeout)
+        import tarfile
+        tar_path = BACKUP_BASE_DIR / f"{backup_name}.tar.gz"
+        logger.info(f"[backup] Creating archive {tar_path}...")
+        _backup_state["progress"]["current"] = "archiving"
+        with tarfile.open(str(tar_path), "w:gz") as tar:
+            tar.add(str(backup_dir), arcname=backup_name)
+        tar_size = tar_path.stat().st_size
+        manifest["archive"] = f"{backup_name}.tar.gz"
+        manifest["archive_size"] = _fmt_bytes(tar_size)
+        manifest["archive_bytes"] = tar_size
+        logger.info(f"[backup] Archive created: {_fmt_bytes(tar_size)}")
+
+        # Cleanup old backups (dirs + tar.gz)
+        import shutil
+        existing_dirs = sorted([d for d in BACKUP_BASE_DIR.glob("backup-*") if d.is_dir()],
+                               key=lambda p: p.name, reverse=True)
+        for old in existing_dirs[BACKUP_MAX_KEEP:]:
             shutil.rmtree(str(old), ignore_errors=True)
+            # Also remove corresponding tar.gz
+            old_tar = BACKUP_BASE_DIR / f"{old.name}.tar.gz"
+            if old_tar.exists():
+                old_tar.unlink()
             logger.info(f"[backup] Cleaned old backup: {old.name}")
 
         _backup_state["last_result"] = manifest
@@ -3946,6 +3968,11 @@ async def backup_list():
                     manifest["actual_size"] = _fmt_bytes(actual_bytes)
                     manifest["actual_bytes"] = actual_bytes
                     manifest["path"] = str(bdir)
+                    # Check if tar.gz exists
+                    tar_file = BACKUP_BASE_DIR / f"{bdir.name}.tar.gz"
+                    manifest["has_archive"] = tar_file.exists()
+                    if tar_file.exists():
+                        manifest["archive_size"] = _fmt_bytes(tar_file.stat().st_size)
                     backups.append(manifest)
                 except Exception:
                     pass
@@ -3964,23 +3991,18 @@ async def backup_list():
 
 @app.get("/api/backup/download/{backup_name}")
 async def backup_download(backup_name: str):
-    """Download a backup as a tar.gz archive. Creates tar on disk first to avoid OOM."""
-    import tarfile
+    """Download a pre-built backup tar.gz archive."""
+    # Strip .tar.gz if passed in the name
+    clean_name = backup_name.replace(".tar.gz", "")
+    tar_path = BACKUP_BASE_DIR / f"{clean_name}.tar.gz"
 
-    backup_dir = BACKUP_BASE_DIR / backup_name
-    if not backup_dir.exists():
-        return {"status": "error", "detail": "Backup not found"}
-
-    # Create tar.gz on disk (not in memory — avoids OOM for large backups)
-    tar_path = BACKUP_BASE_DIR / f"{backup_name}.tar.gz"
     if not tar_path.exists():
-        with tarfile.open(str(tar_path), "w:gz") as tar:
-            tar.add(str(backup_dir), arcname=backup_name)
+        return {"status": "error", "detail": f"Archive not found: {clean_name}.tar.gz"}
 
     return FileResponse(
         str(tar_path),
         media_type="application/gzip",
-        filename=f"{backup_name}.tar.gz",
+        filename=f"{clean_name}.tar.gz",
     )
 
 

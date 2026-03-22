@@ -98,14 +98,20 @@ function BackupHistoryCard({ backup, isLatest }) {
           <span style={{ fontSize: '0.62rem', fontFamily: 'var(--mono)', color: 'var(--accent2)', fontWeight: 700 }}>
             {backup.actual_size || backup.total_size || '?'}
           </span>
-          <a href={`${BASE}/api/backup/download/${backup.name}`}
-             onClick={e => e.stopPropagation()}
-             style={{ fontSize: '0.55rem', fontFamily: 'var(--mono)', fontWeight: 700,
-                      padding: '2px 8px', borderRadius: 4, textDecoration: 'none',
-                      background: 'rgba(0,153,255,0.12)', color: 'var(--accent2)',
-                      border: '1px solid rgba(0,153,255,0.25)' }}>
-            DOWNLOAD
-          </a>
+          {backup.has_archive ? (
+            <a href={`${BASE}/api/backup/download/${backup.name}`}
+               onClick={e => e.stopPropagation()}
+               style={{ fontSize: '0.55rem', fontFamily: 'var(--mono)', fontWeight: 700,
+                        padding: '2px 8px', borderRadius: 4, textDecoration: 'none',
+                        background: 'rgba(0,153,255,0.12)', color: 'var(--accent2)',
+                        border: '1px solid rgba(0,153,255,0.25)' }}>
+              DOWNLOAD {backup.archive_size ? `(${backup.archive_size})` : ''}
+            </a>
+          ) : (
+            <span style={{ fontSize: '0.55rem', fontFamily: 'var(--mono)', color: 'var(--muted)' }}>
+              No archive
+            </span>
+          )}
           <span style={{ color: 'var(--muted)', fontSize: '0.55rem', transition: 'transform 0.2s',
                          transform: open ? 'rotate(180deg)' : 'none' }}>▼</span>
         </div>
