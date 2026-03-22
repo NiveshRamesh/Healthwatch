@@ -118,36 +118,18 @@ function PVCRow({ pvc }) {
   );
 }
 
-/* ── Main Pods & PVCs Panel ───────────────────────────────────────── */
+/* ── Main Pods & PVCs Panel (PVCs only — pod containers moved to Kubernetes panel) */
 export default function PodsPVCsPanel({ data, showOnly }) {
   if (!data) return null;
-  const { pods = [], pvcs = [] } = data;
+  const { pvcs = [] } = data;
 
-  const podWarn     = pods.filter(p => p.status === 'warn').length;
-  const podErr      = pods.filter(p => p.status === 'error' || p.status === 'critical').length;
   const pvcWarn     = pvcs.filter(p => p.status !== 'ok').length;
   const orphanCount = pvcs.filter(p => p.orphaned).length;
   const lostCount   = pvcs.filter(p => p.phase === 'Lost').length;
 
   return (
     <>
-      {(!showOnly || showOnly === 'pods') && <SubSection
-        icon="🫙" title="Pod Container Health"
-        defaultOpen={true}
-        badge={
-          <span style={{ display:'flex', gap:4 }}>
-            {podErr  > 0 && <Chip n={podErr}  color="239,68,68"  label="error" />}
-            {podWarn > 0 && <Chip n={podWarn} color="245,158,11" label="warn"  />}
-            <Chip n={pods.length} color="100,116,139" label="pods" />
-          </span>
-        }
-      >
-        <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', padding:'4px 2px' }}>
-          {pods.map((p, i) => <PodRow key={i} pod={p} />)}
-        </div>
-      </SubSection>}
-
-      {(!showOnly || showOnly === 'pvcs') && <SubSection
+      <SubSection
         icon="💿" title="Persistent Volume Claims"
         defaultOpen={true}
         badge={
@@ -162,7 +144,7 @@ export default function PodsPVCsPanel({ data, showOnly }) {
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', padding:'4px 2px' }}>
           {pvcs.map((p, i) => <PVCRow key={i} pvc={p} />)}
         </div>
-      </SubSection>}
+      </SubSection>
     </>
   );
 }

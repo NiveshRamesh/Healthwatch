@@ -2566,6 +2566,7 @@ async def run_all_checks():
                 "__resources__": safe(k8s_resources, "K8s Resources"),
                 "__connectivity__": safe(pod_connectivity, "Pod Connectivity"),
                 "__images_crashes__": safe(pod_images_crashes, "Images & Crashes"),
+                "__pod_containers__": safe(pvc_pods, "Pod Containers").get("pods", []) if not isinstance(pvc_pods, Exception) else [],
             },
             "pods_pvcs": {"__pods_pvcs__": safe(pvc_pods, "Pods/PVCs")},
             "data_retention": safe(data_retention, "Data Retention"),

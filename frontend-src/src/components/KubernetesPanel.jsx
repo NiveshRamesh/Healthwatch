@@ -227,6 +227,9 @@ export default function KubernetesPanel({ checks }) {
       {/* KPI Status Strip — pod status checks */}
       <StatusStrip checks={checks} />
 
+      {/* Pod Containers */}
+      <PodContainerSection pods={checks.__pod_containers__ || []} />
+
       {/* Node Resources */}
       {nodeRes.length > 0 && (
         <>
@@ -320,6 +323,113 @@ export default function KubernetesPanel({ checks }) {
 }
 
 /* ── Pod Connectivity Section ────────────────────────────────────── */
+/* ── Pod Container Health Section ─────────────────────────────────── */
+function PodContainerSection({ pods }) {
+  const [open, setOpen] = useState(false);
+  if (!pods || pods.length === 0) return null;
+
+  const podWarn = pods.filter(p => p.status === 'warn' || p.status === 'error' || p.status === 'critical').length;
+
+  return (
+    <>
+      <GroupDivider label="Pod Container Health" />
+      <div style={{ margin: '0 16px 16px', borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' }}>
+        <div onClick={() => setOpen(o => !o)} style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '10px 16px', cursor: 'pointer', background: 'rgba(0,212,170,0.03)',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: '1rem' }}>🫙</span>
+            <span style={{ fontSize: '0.78rem', fontWeight: 600 }}>{pods.length} Pod(s)</span>
+            {podWarn > 0 && <Chip n={podWarn} color="245,158,11" label="warn" />}
+          </div>
+          <span style={{ color: 'var(--muted)', fontSize: '0.6rem', transition: 'transform 0.25s',
+                         transform: open ? 'rotate(180deg)' : 'none' }}>▼</span>
+        </div>
+        {open && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', padding: '4px 2px', animation: 'fadeIn 0.2s ease' }}>
+            {pods.map((pod, i) => <PodContainerCard key={i} pod={pod} />)}
+          </div>
+        )}
+      </div>
+    </>
+  );
+}
+
+function PodContainerCard({ pod }) {
+  const [open, setOpen] = useState(false);
+  const { name, phase, containers, status } = pod;
+  const totalRestarts = (containers || []).reduce((s, c) => s + (c.restarts || 0), 0);
+  const nonRunning = (containers || []).some(c => c.state !== 'running');
+  const borderColor = status !== 'ok'
+    ? `rgba(${status === 'warn' ? '245,158,11' : '239,68,68'},0.3)` : 'var(--border)';
+
+  return (
+    <div style={{ margin: 4, background: 'var(--surface2)', borderRadius: 8, overflow: 'hidden',
+                  border: `1px solid ${borderColor}` }}>
+      <div onClick={() => setOpen(o => !o)} style={{
+        padding: '8px 10px', cursor: 'pointer', display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+      }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '0.7rem', fontWeight: 700, color: 'var(--text)',
+                           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160 }}>{name}</span>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: '0.58rem',
+                           color: phase === 'Running' ? 'var(--ok)' : phase === 'Pending' ? 'var(--warn)' : 'var(--error)',
+                           background: 'var(--surface3)', borderRadius: 3, padding: '1px 5px' }}>{phase}</span>
+          </div>
+          <div style={{ display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' }}>
+            {totalRestarts > 0 && (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '0.58rem', color: 'var(--warn)',
+                             background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)',
+                             borderRadius: 3, padding: '1px 5px' }}>↺ {totalRestarts}</span>
+            )}
+            {nonRunning && (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: '0.58rem', color: 'var(--error)',
+                             background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)',
+                             borderRadius: 3, padding: '1px 5px' }}>not running</span>
+            )}
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+          <Badge status={status} size="sm" />
+          <span style={{ color: 'var(--muted)', fontSize: '0.6rem', transition: 'transform 0.2s',
+                         transform: open ? 'rotate(180deg)' : 'none' }}>▼</span>
+        </div>
+      </div>
+      {open && (
+        <div style={{ background: 'var(--surface3)', padding: '8px 10px',
+                      borderTop: '1px solid var(--border)', animation: 'fadeIn 0.2s ease' }}>
+          {(containers || []).map((c, i) => (
+            <div key={i} style={{ background: 'var(--surface)', borderRadius: 5, padding: '6px 8px', marginBottom: 4,
+                                  border: c.restarts > 10 ? '1px solid rgba(245,158,11,0.3)' : '1px solid transparent' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '0.65rem', fontWeight: 700 }}>{c.name}</span>
+                <span style={{ fontFamily: 'var(--mono)', fontSize: '0.6rem',
+                               color: c.state === 'running' ? 'var(--ok)' : 'var(--warn)' }}>{c.state}</span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 4 }}>
+                {[
+                  ['Restarts', c.restarts, c.restarts > 10 ? 'var(--warn)' : 'var(--muted)'],
+                  ['CPU Lim', c.cpu_limit || '\u2014', 'var(--muted)'],
+                  ['Mem Lim', c.mem_limit || '\u2014', 'var(--muted)'],
+                  ['CPU Req', c.cpu_req || '\u2014', 'var(--muted)'],
+                ].map(([lbl, val, color]) => (
+                  <div key={lbl}>
+                    <div style={{ fontSize: '0.55rem', color: 'var(--muted)', textTransform: 'uppercase',
+                                  letterSpacing: '0.5px', fontFamily: 'var(--mono)', marginBottom: 1 }}>{lbl}</div>
+                    <div style={{ fontFamily: 'var(--mono)', fontSize: '0.62rem', color }}>{val}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ConnectivitySection({ data }) {
   const [open, setOpen] = useState(false);
   if (!data || !data.pods) return null;
