@@ -15,6 +15,10 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create", "get"]
+  # Pod logs — required for crash log extraction (check_pod_images_and_crashes)
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
   # Metrics API (for node/pod CPU and memory usage)
   - apiGroups: ["metrics.k8s.io"]
     resources: ["nodes", "pods"]
