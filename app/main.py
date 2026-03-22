@@ -1632,7 +1632,9 @@ async def check_data_retention() -> dict:
                 except Exception:
                     continue
 
-                if tables_val == "*" and category.lower() == "all":
+                logger.info(f"[data_retention] raw row: name={policy_name!r} tables={tables_val!r} "
+                            f"cat={category!r} store={store_type!r} hot={hot} warm={warm}")
+                if tables_val == "*" and category.lower() in ("all", "default", ""):
                     default_hot = hot
                     default_warm = warm
                     default_retention_days = total
@@ -1643,14 +1645,18 @@ async def check_data_retention() -> dict:
                 else:
                     # Parse comma-separated table prefixes
                     prefixes = [p.strip() for p in tables_val.split(",") if p.strip()]
+                    # Priority: Custom=10 > Category(Metrics/Logs/etc)=5 > Default=0
+                    priority = 10 if category.lower() == "custom" else 5
                     policies.append({
                         "name": policy_name,
+                        "category": category,
                         "prefixes": prefixes,
                         "hot": hot,
                         "warm": warm,
                         "total": total,
+                        "priority": priority,
                     })
-                    logger.info(f"[data_retention] policy '{policy_name}': "
+                    logger.info(f"[data_retention] policy '{policy_name}' (cat={category}, pri={priority}): "
                                 f"prefixes={prefixes} Hot={hot}d Warm={warm}d → CH retention={total}d")
 
             logger.info(f"[data_retention] policy from {policy_source}: "
@@ -1660,17 +1666,22 @@ async def check_data_retention() -> dict:
 
         # ── Helper: find matching policy for a table name ─────────────────────
         def match_policy(table_name):
-            """Returns (retention_days, hot_days, warm_days, policy_name) for a _data table."""
-            # Strip _data suffix for prefix matching
+            """Returns (retention_days, hot_days, warm_days, policy_name) for a _data table.
+            Priority: Custom(10) > Category like Metrics/Logs(5) > Default(0).
+            Within same priority, longest prefix match wins."""
             base = table_name[:-5] if table_name.endswith("_data") else table_name
-            # Check custom policies (longest prefix match wins)
             best_match = None
+            best_priority = -1
             best_len = 0
             for pol in policies:
+                pri = pol.get("priority", 5)
                 for prefix in pol["prefixes"]:
-                    if base.startswith(prefix) and len(prefix) > best_len:
-                        best_match = pol
-                        best_len = len(prefix)
+                    if base.startswith(prefix):
+                        # Higher priority wins; within same priority, longer prefix wins
+                        if pri > best_priority or (pri == best_priority and len(prefix) > best_len):
+                            best_match = pol
+                            best_priority = pri
+                            best_len = len(prefix)
             if best_match:
                 return best_match["total"], best_match["hot"], best_match["warm"], best_match["name"]
             return default_retention_days, default_hot, default_warm, default_policy_name
