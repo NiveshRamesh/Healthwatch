@@ -100,15 +100,14 @@ export default function CheckRow({ name, check, details, onRestartClick, onExpan
             onClick={() => setShowAnalyze(true)}
             title="AI-powered RCA and fix suggestions"
             style={{
-              display:'inline-flex', alignItems:'center', gap:2,
-              fontSize:'0.55rem', fontFamily:'var(--mono)', fontWeight:700,
-              padding:'2px 6px', borderRadius:4, cursor:'pointer',
+              display:'inline-flex', alignItems:'center', justifyContent:'center',
+              width:20, height:20, borderRadius:'50%', cursor:'pointer',
               border:'1px solid var(--border)', color:'var(--muted)',
-              background:'transparent', whiteSpace:'nowrap', flexShrink:0,
-              transition:'all 0.15s',
+              background:'transparent', flexShrink:0,
+              transition:'all 0.15s', fontSize:'0.6rem',
             }}
-            onMouseEnter={e => { e.currentTarget.style.borderColor='var(--accent)'; e.currentTarget.style.color='var(--accent)'; }}
-            onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.color='var(--muted)'; }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor='var(--accent)'; e.currentTarget.style.color='var(--accent)'; e.currentTarget.style.background='rgba(0,212,170,0.1)'; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.color='var(--muted)'; e.currentTarget.style.background='transparent'; }}
           >🔍</span>
         )}
 
