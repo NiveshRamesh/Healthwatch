@@ -58,7 +58,7 @@ config:
   pvcUsedThreshold: "0.8"
 
   # PostgreSQL
-  postgresHost: "postgresql.vsmaps.svc.cluster.local"
+  postgresHost: "timescaledb.vsmaps.svc.cluster.local"
   postgresPort: "5432"
   postgresUser: "core"
   postgresDb: "multicore"
