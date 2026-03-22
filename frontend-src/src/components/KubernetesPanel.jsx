@@ -3,30 +3,52 @@ import { Badge, ProgressBar, Chip } from './Shared';
 
 /* ── KPI Status Strip — pod status checks as horizontal cards ──── */
 function StatusStrip({ checks }) {
+  const imgData = checks.__images_crashes__ || {};
+  const allPods = imgData.pods || [];
+
   const items = Object.entries(checks)
     .filter(([k, v]) => !k.startsWith('__') && v?.status)
-    .map(([name, check]) => ({ name, ...check }));
+    .map(([name, check]) => {
+      // Match pod image tag: detail starts with pod name
+      const podName = (check.detail || '').split(' ')[0];
+      const podInfo = allPods.find(p => p.name === podName);
+      const tags = podInfo
+        ? [...new Set(podInfo.containers.map(c => c.tag))].filter(t => t && t !== 'latest')
+        : [];
+      return { name, ...check, tags };
+    });
 
   if (!items.length) return null;
 
-  // Show in a grid — 3 columns for pod checks
   const cols = Math.min(items.length, 3);
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: `repeat(${cols}, 1fr)`, gap: 10, padding: '16px 20px' }}>
-      {items.map(({ name, status, detail }) => {
+      {items.map(({ name, status, detail, tags }) => {
         const rgb = status === 'ok' ? '16,185,129' : status === 'warn' ? '245,158,11' : '239,68,68';
         return (
           <div key={name} style={{
             background: `linear-gradient(160deg, rgba(${rgb},0.1), rgba(${rgb},0.02))`,
             border: `1px solid rgba(${rgb},0.18)`, borderTop: `3px solid rgba(${rgb},0.7)`,
-            borderRadius: 10, padding: '12px 14px',
+            borderRadius: 10, padding: '14px 14px',
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
               <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text)' }}>{name}</span>
               <Badge status={status} size="sm" />
             </div>
             <div style={{ fontSize: '0.68rem', color: 'var(--muted)', fontFamily: 'var(--mono)', lineHeight: 1.4 }}>{detail}</div>
+            {tags.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
+                {tags.map(tag => (
+                  <span key={tag} style={{
+                    fontSize: '0.55rem', fontFamily: 'var(--mono)', fontWeight: 700,
+                    padding: '2px 6px', borderRadius: 4,
+                    background: 'rgba(0,153,255,0.1)', color: 'var(--accent2)',
+                    border: '1px solid rgba(0,153,255,0.2)',
+                  }}>{tag}</span>
+                ))}
+              </div>
+            )}
           </div>
         );
       })}
@@ -394,64 +416,16 @@ function ConnectivityPod({ pod }) {
   );
 }
 
-/* ── Images & Crash Logs Section ─────────────────────────────────── */
+/* ── Crash Logs Section ───────────────────────────────────────────── */
 function ImagesCrashSection({ data }) {
-  const [imagesOpen, setImagesOpen] = useState(false);
   const [crashOpen, setCrashOpen] = useState(false);
   if (!data) return null;
 
-  const images = data.image_summary || [];
   const crashPods = data.crash_pods || [];
   const allPods = data.pods || [];
 
   return (
     <>
-      {/* Image Tags */}
-      {images.length > 0 && (
-        <>
-          <GroupDivider label="Container Images" />
-          <div style={{ margin: '0 16px 16px', borderRadius: 10, overflow: 'hidden', border: '1px solid var(--border)' }}>
-            <div onClick={() => setImagesOpen(o => !o)} style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              padding: '10px 16px', cursor: 'pointer', background: 'rgba(0,212,170,0.03)',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: '1rem' }}>🏷️</span>
-                <span style={{ fontSize: '0.78rem', fontWeight: 600 }}>{images.length} Images</span>
-              </div>
-              <span style={{ color: 'var(--muted)', fontSize: '0.6rem', transition: 'transform 0.25s',
-                             transform: imagesOpen ? 'rotate(180deg)' : 'none' }}>▼</span>
-            </div>
-            {imagesOpen && (
-              <div style={{ padding: '4px 0', animation: 'fadeIn 0.2s ease' }}>
-                {images.map((img, i) => (
-                  <div key={img.image} style={{
-                    display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) 80px 40px',
-                    gap: 8, padding: '6px 16px', alignItems: 'center',
-                    background: i % 2 === 0 ? 'transparent' : 'rgba(0,212,170,0.02)',
-                    borderBottom: '1px solid var(--border)',
-                  }}>
-                    <span style={{ fontSize: '0.62rem', fontFamily: 'var(--mono)', color: 'var(--text)',
-                                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {img.image}
-                    </span>
-                    <span style={{ fontSize: '0.58rem', fontFamily: 'var(--mono)', fontWeight: 700,
-                                   padding: '2px 6px', borderRadius: 4,
-                                   background: 'rgba(0,153,255,0.1)', color: 'var(--accent2)', textAlign: 'center' }}>
-                      {img.tag}
-                    </span>
-                    <span style={{ fontSize: '0.58rem', fontFamily: 'var(--mono)', color: 'var(--muted)', textAlign: 'center' }}>
-                      {img.count}x
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </>
-      )}
-
-      {/* Crash Logs */}
       {crashPods.length > 0 && (
         <>
           <GroupDivider label="Crash Logs" />
