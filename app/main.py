@@ -3935,6 +3935,8 @@ async def backup_list():
     backups = []
     if BACKUP_BASE_DIR.exists():
         for bdir in sorted(BACKUP_BASE_DIR.glob("backup-*"), key=lambda p: p.name, reverse=True):
+            if not bdir.is_dir():
+                continue
             manifest_file = bdir / "manifest.json"
             if manifest_file.exists():
                 try:
