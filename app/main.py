@@ -2710,6 +2710,15 @@ async def run_all_checks():
             },
             "data_retention": safe(data_retention, "Data Retention"),
             "cert_health": safe(k8s_certs, "Cert Health"),
+            "backups": {
+                "Last Backup": {
+                    "status": "ok" if _backup_state.get("last_result") else "warn",
+                    "detail": (_backup_state["last_result"]["name"] + " · " +
+                               _backup_state["last_result"].get("total_size", "?")
+                               if _backup_state.get("last_result")
+                               else "No backups yet — click Run Backup"),
+                },
+            },
         }
         last_checked = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         elapsed = round(time.time() - t0, 2)
@@ -3600,6 +3609,378 @@ async def cert_postchecks():
     any_fail = any(c["status"] == "fail" for c in checks)
     logger.info(f"[cert-postchecks] done: {len(checks)} checks")
     return {"checks": checks, "all_pass": all_pass, "any_fail": any_fail}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# BACKUP SYSTEM
+# ═══════════════════════════════════════════════════════════════════════════════
+BACKUP_BASE_DIR = Path(os.getenv("BACKUP_DIR", "/var/lib/healthwatch/backups"))
+BACKUP_MAX_KEEP = int(os.getenv("BACKUP_MAX_KEEP", "5"))
+_backup_state = {"running": False, "progress": {}, "last_result": None}
+
+
+def _backup_postgres(backup_dir: Path) -> dict:
+    """Backup PostgreSQL databases via pg_dump exec into pod."""
+    logger.info("[backup:pg] START")
+    pg_dir = backup_dir / "postgresql"
+    pg_dir.mkdir(parents=True, exist_ok=True)
+    databases = ["multicore"]
+    results = []
+    for db in databases:
+        try:
+            # pg_dump to stdout in custom format, capture via exec
+            dump_cmd = (f"PGPASSWORD='{POSTGRES_PASSWORD}' pg_dump "
+                        f"-h localhost -U {POSTGRES_USER} -F c -d {db}")
+            output = _sync_exec_pod(PG_POD_NAME, K8S_NAMESPACE, dump_cmd)
+            dump_file = pg_dir / f"{db}.dump"
+            dump_file.write_text(output, errors="surrogateescape")
+            size = dump_file.stat().st_size
+            logger.info(f"[backup:pg] {db}: {round(size/1024)}KB")
+            results.append({"database": db, "status": "ok", "size_bytes": size,
+                            "size": _fmt_bytes(size), "file": f"postgresql/{db}.dump"})
+        except Exception as e:
+            logger.error(f"[backup:pg] {db} FAILED: {e}")
+            results.append({"database": db, "status": "error", "error": str(e)[:200]})
+    total = sum(r.get("size_bytes", 0) for r in results)
+    return {"service": "PostgreSQL", "status": "ok" if all(r["status"] == "ok" for r in results) else "error",
+            "databases": results, "total_size": _fmt_bytes(total), "total_bytes": total}
+
+
+def _backup_clickhouse(backup_dir: Path) -> dict:
+    """Backup ClickHouse schema (CREATE statements) via SQL queries."""
+    logger.info("[backup:ch] START")
+    ch_dir = backup_dir / "clickhouse"
+    ch_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        ch = _get_ch()
+        databases = ["vusmart", "monitoring"]
+        results = []
+        for db in databases:
+            try:
+                # Get all CREATE TABLE/VIEW/MV statements
+                tables = ch.query(
+                    f"SELECT name, engine, create_table_query FROM system.tables "
+                    f"WHERE database='{db}' ORDER BY engine, name"
+                ).result_rows
+                sql_lines = [f"-- ClickHouse Schema Backup: {db}",
+                             f"-- Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                             f"-- Tables: {len(tables)}", ""]
+                for name, engine, create_q in tables:
+                    # Add IF NOT EXISTS
+                    q = create_q.replace(f"CREATE TABLE {db}.", f"CREATE TABLE IF NOT EXISTS {db}.")
+                    q = q.replace(f"CREATE VIEW {db}.", f"CREATE VIEW IF NOT EXISTS {db}.")
+                    q = q.replace(f"CREATE MATERIALIZED VIEW {db}.",
+                                  f"CREATE MATERIALIZED VIEW IF NOT EXISTS {db}.")
+                    sql_lines.append(f"-- {engine}: {name}")
+                    sql_lines.append(q + ";")
+                    sql_lines.append("")
+
+                sql_file = ch_dir / f"{db}_schema.sql"
+                sql_file.write_text("\n".join(sql_lines))
+                size = sql_file.stat().st_size
+                logger.info(f"[backup:ch] {db}: {len(tables)} tables, {round(size/1024)}KB")
+                results.append({"database": db, "tables": len(tables), "status": "ok",
+                                "size_bytes": size, "size": _fmt_bytes(size),
+                                "file": f"clickhouse/{db}_schema.sql"})
+            except Exception as e:
+                logger.error(f"[backup:ch] {db} FAILED: {e}")
+                results.append({"database": db, "status": "error", "error": str(e)[:200]})
+
+        # Backup users and grants
+        try:
+            users_rows = ch.query("SHOW CREATE USER").result_rows
+            grants_rows = ch.query(
+                "SELECT user_name, grants FROM system.grants ORDER BY user_name"
+            ).result_rows
+            user_sql = ["-- ClickHouse Users & Grants", ""]
+            for row in users_rows:
+                user_sql.append(row[0] + ";")
+            user_sql.append("")
+            for row in grants_rows:
+                user_sql.append(f"-- Grants for {row[0]}")
+            user_file = ch_dir / "users_and_grants.sql"
+            user_file.write_text("\n".join(user_sql))
+            logger.info(f"[backup:ch] users: {len(users_rows)} users")
+        except Exception as e:
+            logger.warning(f"[backup:ch] users backup failed: {e}")
+
+        total = sum(r.get("size_bytes", 0) for r in results)
+        return {"service": "ClickHouse", "status": "ok" if all(r["status"] == "ok" for r in results) else "error",
+                "databases": results, "total_size": _fmt_bytes(total), "total_bytes": total}
+    except Exception as e:
+        logger.error(f"[backup:ch] FAILED: {e}")
+        return {"service": "ClickHouse", "status": "error", "error": str(e)[:200],
+                "total_size": "0B", "total_bytes": 0}
+
+
+def _backup_minio(backup_dir: Path) -> dict:
+    """Backup MinIO buckets via minio Python SDK."""
+    logger.info("[backup:minio] START")
+    minio_dir = backup_dir / "minio"
+    minio_dir.mkdir(parents=True, exist_ok=True)
+    exclude_buckets = {"report", "hs-archives", "vustream-log", "hs-archival"}
+    try:
+        from minio import Minio
+        from urllib.parse import urlparse
+        parsed = urlparse(MINIO_ENDPOINT)
+        minio_host = parsed.hostname
+        minio_port = parsed.port or 9000
+        access_key = os.getenv("MINIO_ACCESS_KEY", "minio")
+        secret_key = os.getenv("MINIO_SECRET_KEY", "minio123")
+
+        client = Minio(f"{minio_host}:{minio_port}", access_key=access_key,
+                       secret_key=secret_key, secure=False)
+        buckets = client.list_buckets()
+        results = []
+        total_bytes = 0
+
+        for bucket in buckets:
+            if bucket.name in exclude_buckets:
+                logger.info(f"[backup:minio] skip excluded bucket: {bucket.name}")
+                continue
+            bucket_dir = minio_dir / bucket.name
+            bucket_dir.mkdir(parents=True, exist_ok=True)
+            bucket_bytes = 0
+            obj_count = 0
+            try:
+                for obj in client.list_objects(bucket.name, recursive=True):
+                    if obj.is_dir:
+                        continue
+                    obj_path = bucket_dir / obj.object_name.replace("/", os.sep)
+                    obj_path.parent.mkdir(parents=True, exist_ok=True)
+                    client.fget_object(bucket.name, obj.object_name, str(obj_path))
+                    bucket_bytes += obj.size or 0
+                    obj_count += 1
+                logger.info(f"[backup:minio] {bucket.name}: {obj_count} objects, "
+                            f"{_fmt_bytes(bucket_bytes)}")
+                results.append({"bucket": bucket.name, "objects": obj_count, "status": "ok",
+                                "size_bytes": bucket_bytes, "size": _fmt_bytes(bucket_bytes)})
+                total_bytes += bucket_bytes
+            except Exception as e:
+                logger.error(f"[backup:minio] bucket {bucket.name} FAILED: {e}")
+                results.append({"bucket": bucket.name, "status": "error", "error": str(e)[:200]})
+
+        return {"service": "MinIO", "status": "ok" if all(r["status"] == "ok" for r in results) else "error",
+                "buckets": results, "total_size": _fmt_bytes(total_bytes), "total_bytes": total_bytes}
+    except Exception as e:
+        logger.error(f"[backup:minio] FAILED: {e}")
+        return {"service": "MinIO", "status": "error", "error": str(e)[:200],
+                "total_size": "0B", "total_bytes": 0}
+
+
+def _backup_k8s_objects(backup_dir: Path) -> dict:
+    """Backup Kubernetes objects as YAML files."""
+    logger.info("[backup:k8s] START")
+    k8s_dir = backup_dir / "k8s-objects"
+    k8s_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        from kubernetes import client as k8s_client
+        import yaml
+
+        core = k8s_client.CoreV1Api()
+        apps = k8s_client.AppsV1Api()
+        batch = k8s_client.BatchV1Api()
+
+        ns = K8S_NAMESPACE
+        ns_dir = k8s_dir / ns
+        total_files = 0
+        total_bytes = 0
+
+        # Resource types to backup
+        resource_funcs = [
+            ("configmaps", lambda: core.list_namespaced_config_map(ns)),
+            ("secrets", lambda: core.list_namespaced_secret(ns)),
+            ("services", lambda: core.list_namespaced_service(ns)),
+            ("deployments", lambda: apps.list_namespaced_deployment(ns)),
+            ("statefulsets", lambda: apps.list_namespaced_stateful_set(ns)),
+            ("daemonsets", lambda: apps.list_namespaced_daemon_set(ns)),
+            ("cronjobs", lambda: batch.list_namespaced_cron_job(ns)),
+            ("pvcs", lambda: core.list_namespaced_persistent_volume_claim(ns)),
+            ("serviceaccounts", lambda: core.list_namespaced_service_account(ns)),
+        ]
+
+        results = []
+        for rtype, func in resource_funcs:
+            rtype_dir = ns_dir / rtype
+            rtype_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                items = func().items
+                for item in items:
+                    name = item.metadata.name
+                    # Convert to dict and clean metadata
+                    obj = k8s_client.ApiClient().sanitize_for_serialization(item)
+                    # Remove runtime fields
+                    meta = obj.get("metadata", {})
+                    for field in ["managedFields", "resourceVersion", "uid",
+                                  "creationTimestamp", "generation"]:
+                        meta.pop(field, None)
+                    obj_file = rtype_dir / f"{name}.yaml"
+                    content = yaml.dump(obj, default_flow_style=False)
+                    obj_file.write_text(content)
+                    total_files += 1
+                    total_bytes += len(content)
+                results.append({"type": rtype, "count": len(items), "status": "ok"})
+                logger.info(f"[backup:k8s] {rtype}: {len(items)} objects")
+            except Exception as e:
+                logger.warning(f"[backup:k8s] {rtype} failed: {e}")
+                results.append({"type": rtype, "count": 0, "status": "error", "error": str(e)[:100]})
+
+        return {"service": "K8s Objects", "status": "ok", "namespace": ns,
+                "resource_types": results, "total_files": total_files,
+                "total_size": _fmt_bytes(total_bytes), "total_bytes": total_bytes}
+    except Exception as e:
+        logger.error(f"[backup:k8s] FAILED: {e}")
+        return {"service": "K8s Objects", "status": "error", "error": str(e)[:200],
+                "total_size": "0B", "total_bytes": 0}
+
+
+def _run_backup():
+    """Run full backup — all services. Called in background thread."""
+    import json as _json
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    backup_name = f"backup-{timestamp}"
+    backup_dir = BACKUP_BASE_DIR / backup_name
+
+    _backup_state["running"] = True
+    _backup_state["progress"] = {"name": backup_name, "started": timestamp,
+                                 "services": {}, "current": ""}
+
+    try:
+        BACKUP_BASE_DIR.mkdir(parents=True, exist_ok=True)
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        # Run each service backup
+        services = [
+            ("postgresql", _backup_postgres),
+            ("clickhouse", _backup_clickhouse),
+            ("minio", _backup_minio),
+            ("k8s_objects", _backup_k8s_objects),
+        ]
+
+        results = {}
+        for svc_name, func in services:
+            _backup_state["progress"]["current"] = svc_name
+            logger.info(f"[backup] Running {svc_name}...")
+            try:
+                result = func(backup_dir)
+                results[svc_name] = result
+                _backup_state["progress"]["services"][svc_name] = {
+                    "status": result.get("status", "error"),
+                    "size": result.get("total_size", "0B"),
+                }
+            except Exception as e:
+                logger.error(f"[backup] {svc_name} FAILED: {e}")
+                results[svc_name] = {"service": svc_name, "status": "error", "error": str(e)[:200]}
+                _backup_state["progress"]["services"][svc_name] = {"status": "error"}
+
+        # Calculate total size
+        total_bytes = sum(r.get("total_bytes", 0) for r in results.values())
+
+        # Write manifest
+        manifest = {
+            "name": backup_name,
+            "timestamp": timestamp,
+            "services": results,
+            "total_size": _fmt_bytes(total_bytes),
+            "total_bytes": total_bytes,
+        }
+        (backup_dir / "manifest.json").write_text(_json.dumps(manifest, indent=2, default=str))
+
+        # Cleanup old backups
+        existing = sorted(BACKUP_BASE_DIR.glob("backup-*"), key=lambda p: p.name, reverse=True)
+        for old in existing[BACKUP_MAX_KEEP:]:
+            import shutil
+            shutil.rmtree(str(old), ignore_errors=True)
+            logger.info(f"[backup] Cleaned old backup: {old.name}")
+
+        _backup_state["last_result"] = manifest
+        _backup_state["progress"]["current"] = "done"
+        logger.info(f"[backup] DONE: {backup_name} total={_fmt_bytes(total_bytes)}")
+
+    except Exception as e:
+        logger.error(f"[backup] FATAL: {e}\n{traceback.format_exc()}")
+        _backup_state["progress"]["current"] = "error"
+        _backup_state["progress"]["error"] = str(e)
+    finally:
+        _backup_state["running"] = False
+
+
+@app.post("/api/backup/trigger")
+async def backup_trigger(background_tasks: BackgroundTasks):
+    """Trigger a full backup of all services."""
+    if _backup_state["running"]:
+        return {"status": "error", "detail": "Backup already running"}
+    logger.info("[backup] Triggered via API")
+    import concurrent.futures
+    loop = asyncio.get_event_loop()
+    # Run in thread to avoid blocking uvloop
+    loop.run_in_executor(None, _run_backup)
+    return {"status": "ok", "detail": "Backup started"}
+
+
+@app.get("/api/backup/status")
+async def backup_status():
+    """Get current backup progress or last result."""
+    return {
+        "running": _backup_state["running"],
+        "progress": _backup_state["progress"],
+        "last_result": _backup_state["last_result"],
+    }
+
+
+@app.get("/api/backup/list")
+async def backup_list():
+    """List all available backups with sizes."""
+    import json as _json
+    backups = []
+    if BACKUP_BASE_DIR.exists():
+        for bdir in sorted(BACKUP_BASE_DIR.glob("backup-*"), key=lambda p: p.name, reverse=True):
+            manifest_file = bdir / "manifest.json"
+            if manifest_file.exists():
+                try:
+                    manifest = _json.loads(manifest_file.read_text())
+                    # Calculate actual directory size
+                    actual_bytes = sum(f.stat().st_size for f in bdir.rglob("*") if f.is_file())
+                    manifest["actual_size"] = _fmt_bytes(actual_bytes)
+                    manifest["actual_bytes"] = actual_bytes
+                    manifest["path"] = str(bdir)
+                    backups.append(manifest)
+                except Exception:
+                    pass
+            else:
+                # No manifest — just show directory
+                actual_bytes = sum(f.stat().st_size for f in bdir.rglob("*") if f.is_file())
+                backups.append({
+                    "name": bdir.name,
+                    "actual_size": _fmt_bytes(actual_bytes),
+                    "actual_bytes": actual_bytes,
+                    "path": str(bdir),
+                })
+    return {"backups": backups, "max_keep": BACKUP_MAX_KEEP,
+            "backup_dir": str(BACKUP_BASE_DIR)}
+
+
+@app.get("/api/backup/download/{backup_name}")
+async def backup_download(backup_name: str):
+    """Download a backup as a tar.gz archive."""
+    import tarfile, io
+    from fastapi.responses import StreamingResponse
+
+    backup_dir = BACKUP_BASE_DIR / backup_name
+    if not backup_dir.exists():
+        return {"status": "error", "detail": "Backup not found"}
+
+    # Create tar.gz in memory
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        tar.add(str(backup_dir), arcname=backup_name)
+    buf.seek(0)
+
+    return StreamingResponse(
+        buf,
+        media_type="application/gzip",
+        headers={"Content-Disposition": f"attachment; filename={backup_name}.tar.gz"},
+    )
 
 
 @app.get("/api/health")

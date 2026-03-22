@@ -10,6 +10,7 @@ export const SECTIONS_META = {
   pods_pvcs:       { label:'Pods & PVCs',        sub:'Container Health · Volume Claims',icon:'📦',  cls:'pods_pvcs'       },
   data_retention:  { label:'Data Retention',     sub:'Retention Policy · Data Age',     icon:'🗓️',  cls:'data_retention'  },
   cert_health:     { label:'Cert Health',        sub:'K8s Certificates · Renewal',      icon:'🔐',  cls:'cert_health'     },
+  backups:         { label:'Backups',           sub:'PostgreSQL · ClickHouse · MinIO · K8s', icon:'💾', cls:'backups'        },
 };
 
 export const ICON_BG = {
@@ -21,6 +22,7 @@ export const ICON_BG = {
   pods_pvcs:       'rgba(139,92,246,0.12)',
   data_retention:  'rgba(234,88,12,0.12)',
   cert_health:     'rgba(220,38,38,0.12)',
+  backups:         'rgba(16,185,129,0.12)',
 };
 
 export function sectionOverallStatus(checks) {

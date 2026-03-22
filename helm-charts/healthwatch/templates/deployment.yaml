@@ -69,6 +69,9 @@ spec:
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
+          volumeMounts:
+            - name: backups
+              mountPath: /var/lib/healthwatch/backups
           readinessProbe:
             httpGet:
               path: /api/health
@@ -76,3 +79,8 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5
+      volumes:
+        - name: backups
+          hostPath:
+            path: /var/lib/healthwatch/backups
+            type: DirectoryOrCreate
