@@ -163,7 +163,7 @@ function PodResourceRow({ pod, even }) {
 
   return (
     <div style={{
-      display: 'grid', gridTemplateColumns: 'minmax(0, 1.8fr) minmax(0, 1fr) minmax(0, 1fr) 80px',
+      display: 'grid', gridTemplateColumns: 'minmax(0, 2.5fr) minmax(0, 1.5fr) minmax(0, 1.5fr) 90px',
       alignItems: 'center', gap: 8,
       padding: '7px 14px 7px 16px',
       background: even ? 'rgba(255,255,255,0.02)' : 'transparent',
@@ -296,7 +296,7 @@ export default function KubernetesPanel({ checks }) {
               <div style={{ animation: 'fadeIn 0.2s ease' }}>
                 {/* Table header */}
                 <div style={{
-                  display: 'grid', gridTemplateColumns: 'minmax(0, 1.8fr) minmax(0, 1fr) minmax(0, 1fr) 80px',
+                  display: 'grid', gridTemplateColumns: 'minmax(0, 2.5fr) minmax(0, 1.5fr) minmax(0, 1.5fr) 90px',
                   gap: 8, padding: '8px 14px 6px 16px',
                   borderBottom: '1px solid rgba(0,212,170,0.15)',
                 }}>

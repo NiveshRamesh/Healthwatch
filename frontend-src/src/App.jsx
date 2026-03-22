@@ -26,7 +26,7 @@ export default function App() {
       />
 
       {/* Main content */}
-      <main style={{ marginLeft: 220, flex: 1, padding: '32px 40px 60px', maxWidth: 1180 }}>
+      <main style={{ marginLeft: 220, flex: 1, padding: '32px 40px 60px' }}>
         {running && !hasData ? (
           <Skeletons />
         ) : !hasData ? (
