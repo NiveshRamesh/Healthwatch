@@ -148,7 +148,7 @@ export default function AnalyzeModal({ checkName, section, status, detail, data,
                 animation: 'spin 0.8s linear infinite',
               }} />
               <div style={{ color: 'var(--muted)', fontSize: '0.78rem' }}>
-                Analyzing with Gemini AI...
+                Analyzing with AI...
               </div>
               <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
             </div>
@@ -159,9 +159,9 @@ export default function AnalyzeModal({ checkName, section, status, detail, data,
               <div style={{ fontSize: '1.5rem', marginBottom: 8 }}>⚠</div>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Analysis failed</div>
               <div style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>{error}</div>
-              {error.includes('GEMINI_API_KEY') && (
+              {(error.includes('API key') || error.includes('API_KEY')) && (
                 <div style={{ marginTop: 12, color: 'var(--warn)', fontSize: '0.68rem', fontFamily: 'var(--mono)' }}>
-                  Add GEMINI_API_KEY to the healthwatch Helm secrets to enable AI analysis.
+                  Add GROK_API_KEY or GEMINI_API_KEY to Helm secrets to enable AI analysis.
                 </div>
               )}
             </div>

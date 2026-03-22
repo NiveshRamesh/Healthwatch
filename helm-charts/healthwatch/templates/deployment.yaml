@@ -54,6 +54,11 @@ spec:
                 secretKeyRef:
                   name: {{ include "healthwatch.fullname" . }}-secrets
                   key: GEMINI_API_KEY
+            - name: GROK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "healthwatch.fullname" . }}-secrets
+                  key: GROK_API_KEY
             - name: MINIO_ACCESS_KEY
               valueFrom:
                 secretKeyRef:

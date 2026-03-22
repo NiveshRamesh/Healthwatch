@@ -74,6 +74,7 @@ secrets:
   clickhousePassword: "Vunet#1234"
   postgresPassword: "beta"
   geminiApiKey: ""   # Set via: helm upgrade --set secrets.geminiApiKey="your-key"
+  grokApiKey: ""     # Set via: helm upgrade --set secrets.grokApiKey="xai-..."
 
 podLabels: {}
 podAnnotations: {}

@@ -4009,8 +4009,9 @@ async def backup_download(backup_name: str):
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI-POWERED RCA ANALYSIS (Gemini API)
 # ═══════════════════════════════════════════════════════════════════════════════
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+AI_API_KEY = os.getenv("GEMINI_API_KEY", "") or os.getenv("GROK_API_KEY", "") or os.getenv("AI_API_KEY", "")
+AI_PROVIDER = os.getenv("AI_PROVIDER", "grok")  # "grok" or "gemini"
+AI_MODEL = os.getenv("AI_MODEL", "grok-3-mini-fast")
 
 ANALYZE_SYSTEM_PROMPT = """You are an expert SRE engineer for VuSmart, a monitoring and observability platform running on Kubernetes.
 
@@ -4045,9 +4046,9 @@ IMPORTANT: Return ONLY valid JSON with this exact structure (no markdown, no cod
 
 @app.post("/api/analyze")
 async def analyze_check(request: Request):
-    """AI-powered RCA analysis using Gemini API."""
-    if not GEMINI_API_KEY:
-        return {"error": "GEMINI_API_KEY not configured. Add it to Helm secrets or environment."}
+    """AI-powered RCA analysis using Grok or Gemini API."""
+    if not AI_API_KEY:
+        return {"error": "AI API key not configured. Set GROK_API_KEY or GEMINI_API_KEY in Helm secrets."}
 
     body = await request.json()
     check_name = body.get("check_name", "Unknown")
@@ -4056,7 +4057,6 @@ async def analyze_check(request: Request):
     detail = body.get("detail", "")
     data = body.get("data", {})
 
-    # Build context for the AI
     data_str = json.dumps(data, default=str)[:3000] if data else "{}"
     user_message = (
         f"Health check FAILED:\n"
@@ -4068,60 +4068,70 @@ async def analyze_check(request: Request):
         f"Analyze this failure and provide RCA with investigation steps and fix commands."
     )
 
-    logger.info(f"[analyze] START check={check_name} section={section} status={status}")
+    logger.info(f"[analyze] START provider={AI_PROVIDER} model={AI_MODEL} check={check_name}")
 
     try:
         import httpx
-        import json as _json
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": ANALYZE_SYSTEM_PROMPT + "\n\n" + user_message}
-                    ]
-                }
-            ],
-            "generationConfig": {
+        if AI_PROVIDER == "grok":
+            url = "https://api.x.ai/v1/chat/completions"
+            payload = {
+                "model": AI_MODEL,
+                "messages": [
+                    {"role": "system", "content": ANALYZE_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_message},
+                ],
                 "temperature": 0.3,
-                "maxOutputTokens": 2048,
-                "responseMimeType": "application/json",
-            },
-        }
+                "max_tokens": 2048,
+            }
+            headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(url, json=payload)
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(url, json=payload, headers=headers)
 
-        if resp.status_code != 200:
-            logger.error(f"[analyze] Gemini API error: {resp.status_code} {resp.text[:300]}")
-            return {"error": f"Gemini API returned {resp.status_code}: {resp.text[:200]}"}
+            if resp.status_code != 200:
+                logger.error(f"[analyze] Grok API error: {resp.status_code} {resp.text[:300]}")
+                return {"error": f"Grok API returned {resp.status_code}: {resp.text[:200]}"}
 
-        result = resp.json()
-        # Extract text from Gemini response
-        candidates = result.get("candidates", [])
-        if not candidates:
-            return {"error": "No response from Gemini"}
+            result = resp.json()
+            text = result.get("choices", [{}])[0].get("message", {}).get("content", "")
 
-        text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+        else:
+            # Gemini fallback
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{AI_MODEL}:generateContent?key={AI_API_KEY}"
+            payload = {
+                "contents": [{"parts": [{"text": ANALYZE_SYSTEM_PROMPT + "\n\n" + user_message}]}],
+                "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048,
+                                     "responseMimeType": "application/json"},
+            }
 
-        # Parse JSON response
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(url, json=payload)
+
+            if resp.status_code != 200:
+                logger.error(f"[analyze] Gemini API error: {resp.status_code} {resp.text[:300]}")
+                return {"error": f"Gemini API returned {resp.status_code}: {resp.text[:200]}"}
+
+            result = resp.json()
+            candidates = result.get("candidates", [])
+            if not candidates:
+                return {"error": "No response from Gemini"}
+            text = candidates[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+
+        # Parse JSON from response
         try:
-            analysis = _json.loads(text)
-        except _json.JSONDecodeError:
-            # Try to extract JSON from markdown code blocks
+            analysis = json.loads(text)
+        except json.JSONDecodeError:
             import re
             json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', text, re.DOTALL)
             if json_match:
-                analysis = _json.loads(json_match.group(1))
+                analysis = json.loads(json_match.group(1))
             else:
-                # Return raw text as RCA
                 analysis = {"rca": text, "likely_causes": [], "investigation_steps": [],
                             "fix_commands": [], "relevant_logs": [],
                             "severity": "medium", "impact": "See analysis above"}
 
-        logger.info(f"[analyze] OK severity={analysis.get('severity', '?')}")
+        logger.info(f"[analyze] OK provider={AI_PROVIDER} severity={analysis.get('severity', '?')}")
         return analysis
 
     except Exception as e:
