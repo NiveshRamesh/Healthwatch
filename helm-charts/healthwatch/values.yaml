@@ -26,7 +26,7 @@ resources:
 config:
   # Kubernetes
   k8sNamespace: "vsmaps"
-  monitoredPods: "denver,nairobi,broker,kafka-cluster-cp-zookeeper,chi-clickhouse,postgresql,minio-tenant,keycloak,traefik"
+  monitoredPods: "denver,nairobi,broker,kafka-cluster-cp-zookeeper,chi-clickhouse,postgresql,minio-tenant,keycloak,traefik,dao,alert,vuinterface,vublock,orchestration,enrichment-preprocessor,linuxmonitor,renderer,reporter,redis,kafka-connect,clickhouse-keeper"
   podRestartThreshold: "10"
   nodeCpuWarnThreshold: "70"
   nodeMemWarnThreshold: "80"

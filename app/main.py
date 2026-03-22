@@ -71,6 +71,9 @@ MINIO_SECURE = os.getenv("MINIO_SECURE", "false").lower() == "true"
 # Pod prefix aliases — map logical names to actual pod name prefixes
 POD_PREFIX_ALIASES: dict = {
     "broker": "kafka-cluster-cp-kafka",
+    "vuinterface": "vuinterface-cairo",
+    "kafka-connect": "kafka-cluster-cp-kafka-connect",
+    "vublock": "vublock-",
 }
 ZK_POD_NAME = os.getenv("ZK_POD_NAME", "kafka-cluster-cp-zookeeper-0")
 ZK_PORT = int(os.getenv("ZK_PORT", "2181"))
