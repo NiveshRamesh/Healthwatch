@@ -224,11 +224,8 @@ export default function KubernetesPanel({ checks }) {
 
   return (
     <>
-      {/* KPI Status Strip — pod status checks */}
+      {/* Cluster Nodes status strip */}
       <StatusStrip checks={checks} />
-
-      {/* Pod Containers */}
-      <PodContainerSection pods={checks.__pod_containers__ || []} />
 
       {/* Node Resources */}
       {nodeRes.length > 0 && (

@@ -35,7 +35,7 @@ export default function ServiceDetailPage({ svcKey, meta, checks, fetchTopic, di
       case 'kubernetes':
         return <KubernetesPanel checks={checks} />;
       case 'pods_pvcs':
-        return <PodsPVCsPanel data={checks.__pods_pvcs__} />;
+        return <PodsPVCsPanel data={checks} />;
       case 'minio':
         return <MinIOPanel checks={checks} />;
       case 'data_retention':

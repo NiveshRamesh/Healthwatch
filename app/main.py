@@ -2578,13 +2578,16 @@ async def run_all_checks():
             "postgres": safe(pg, "Postgres"),
             "minio": safe(minio, "MinIO"),
             "kubernetes": {
-                **safe(k8s_pods, "K8s Pods"),
+                **({"Cluster Nodes": safe(k8s_pods, "K8s Pods").get("Cluster Nodes", {"status": "error", "detail": "N/A"})}),
                 "__resources__": safe(k8s_resources, "K8s Resources"),
                 "__connectivity__": safe(pod_connectivity, "Pod Connectivity"),
                 "__images_crashes__": safe(pod_images_crashes, "Images & Crashes"),
-                "__pod_containers__": safe(pvc_pods, "Pod Containers").get("pods", []) if not isinstance(pvc_pods, Exception) else [],
             },
-            "pods_pvcs": {"__pods_pvcs__": safe(pvc_pods, "Pods/PVCs")},
+            "pods_pvcs": {
+                **{k: v for k, v in safe(k8s_pods, "K8s Pods").items() if k.startswith("Pod:")},
+                "__pods_pvcs__": safe(pvc_pods, "Pods/PVCs"),
+                "__images_crashes__": safe(pod_images_crashes, "Images & Crashes"),
+            },
             "data_retention": safe(data_retention, "Data Retention"),
             "cert_health": safe(k8s_certs, "Cert Health"),
         }
