@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Badge, SubSection, Chip } from './Shared';
+import AnalyzeButton from './AnalyzeButton';
 
 /* ── Pod status card with expandable container details ───────────── */
 function PodStatusCard({ name, status, detail, tags, containers }) {
@@ -19,6 +20,7 @@ function PodStatusCard({ name, status, detail, tags, containers }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
           <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text)' }}>{name}</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <AnalyzeButton checkName={name} section="pods" status={status} detail={detail} />
             <Badge status={status} size="sm" />
             {hasContainers && (
               <span style={{ color: 'var(--muted)', fontSize: '0.55rem', transition: 'transform 0.2s',

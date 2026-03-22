@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Badge, Tip } from './Shared';
+import AnalyzeButton from './AnalyzeButton';
 
 const BASE = '/healthwatch';
 
@@ -21,7 +22,10 @@ function StatusStrip({ checks }) {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
               <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text)' }}>{name}</span>
-              <Badge status={status} size="sm" />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <AnalyzeButton checkName={name} section="cert_health" status={status} detail={detail} />
+                <Badge status={status} size="sm" />
+              </div>
             </div>
             <div style={{ fontSize: '0.7rem', color: 'var(--muted)', fontFamily: 'var(--mono)', lineHeight: 1.4 }}>{detail}</div>
           </div>

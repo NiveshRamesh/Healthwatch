@@ -2,6 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { Badge, Tip, Chip } from './Shared';
 import { fmt } from '../utils';
 import Modal from './Modal';
+import AnalyzeButton from './AnalyzeButton';
 
 const BASE = '/healthwatch';
 
@@ -89,6 +90,7 @@ function ChCheckRow({ icon, label, status, detail, children, tip }) {
             <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text)' }}>{label}</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
               <Tip text={tip} />
+              <AnalyzeButton checkName={label} section="clickhouse" status={status} detail={detail} />
               <Badge status={status} size="sm" />
               {hasDetail && (
                 <span style={{

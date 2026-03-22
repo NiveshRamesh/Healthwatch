@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Badge, Chip } from './Shared';
+import AnalyzeButton from './AnalyzeButton';
 
 /* ── Status strip ────────────────────────────────────────────────── */
 function StatusStrip({ checks }) {
@@ -22,7 +23,10 @@ function StatusStrip({ checks }) {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
               <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text)' }}>{name}</span>
-              <Badge status={status} size="sm" />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                <AnalyzeButton checkName={name} section="postgres" status={status} detail={detail} />
+                <Badge status={status} size="sm" />
+              </div>
             </div>
             <div style={{ fontSize: '0.68rem', color: 'var(--muted)', fontFamily: 'var(--mono)', lineHeight: 1.4 }}>{detail}</div>
           </div>

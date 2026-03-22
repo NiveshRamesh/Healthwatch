@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Badge, ProgressBar, Chip } from './Shared';
+import AnalyzeButton from './AnalyzeButton';
 
 /* ── KPI Status Strip — pod status checks as horizontal cards ──── */
 function StatusStrip({ checks }) {
@@ -196,7 +197,10 @@ function PodResourceRow({ pod, even }) {
         </span>
       </div>
 
-      <div style={{ textAlign: 'right' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+        <AnalyzeButton checkName={`Pod: ${name}`} section="kubernetes" status={status}
+          detail={`CPU: ${(cpu_used_pct||0).toFixed(1)}%, MEM: ${(memory_used_pct||0).toFixed(1)}%`}
+          data={pod} />
         <Badge status={status} size="sm" />
       </div>
     </div>
