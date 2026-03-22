@@ -1397,30 +1397,53 @@ def _sync_check_postgres() -> dict:
 
 
 def _sync_check_pg_wal() -> dict:
-    """Check pg_wal size via kubectl exec into postgres pod."""
+    """Check pg_wal size, PGDATA size, and disk capacity via kubectl exec."""
     try:
+        # Get pg_wal size, PGDATA size, and filesystem capacity in one exec
         result = _sync_exec_pod(
             PG_POD_NAME, K8S_NAMESPACE,
-            f"du -sb {PG_DATA_PATH}/pg_wal 2>/dev/null || echo '0\t'"
+            f"du -sb {PG_DATA_PATH}/pg_wal 2>/dev/null; "
+            f"du -sb {PG_DATA_PATH} 2>/dev/null; "
+            f"df -B1 {PG_DATA_PATH} 2>/dev/null | tail -1"
         )
-        parts = result.strip().split()
-        wal_bytes = int(parts[0]) if parts else 0
+        lines = result.strip().splitlines()
+
+        wal_bytes = 0
+        total_bytes = 0
+        pvc_total_bytes = 0
+        pvc_used_bytes = 0
+        pvc_avail_bytes = 0
+
+        for line in lines:
+            parts = line.split()
+            if len(parts) >= 2 and parts[1].endswith("pg_wal"):
+                wal_bytes = int(parts[0])
+            elif len(parts) >= 2 and parts[1].endswith("pg_data"):
+                total_bytes = int(parts[0])
+            elif len(parts) >= 4 and parts[0].startswith("/"):
+                # df output: filesystem 1B-blocks used available use% mount
+                pvc_total_bytes = int(parts[1])
+                pvc_used_bytes = int(parts[2])
+                pvc_avail_bytes = int(parts[3])
+
         wal_mb = round(wal_bytes / (1024 * 1024), 1)
-
-        # Also get total PGDATA size
-        result2 = _sync_exec_pod(
-            PG_POD_NAME, K8S_NAMESPACE,
-            f"du -sb {PG_DATA_PATH} 2>/dev/null || echo '0\t'"
-        )
-        parts2 = result2.strip().split()
-        total_bytes = int(parts2[0]) if parts2 else 0
         total_mb = round(total_bytes / (1024 * 1024), 1)
+        pvc_total_gb = round(pvc_total_bytes / (1024 ** 3), 1)
+        pvc_used_gb = round(pvc_used_bytes / (1024 ** 3), 1)
+        pvc_avail_gb = round(pvc_avail_bytes / (1024 ** 3), 1)
+        pvc_used_pct = round(pvc_used_bytes / pvc_total_bytes * 100, 1) if pvc_total_bytes > 0 else 0
 
-        return {"wal_bytes": wal_bytes, "wal_mb": wal_mb,
-                "total_bytes": total_bytes, "total_mb": total_mb}
+        return {
+            "wal_bytes": wal_bytes, "wal_mb": wal_mb,
+            "total_bytes": total_bytes, "total_mb": total_mb,
+            "pvc_total_gb": pvc_total_gb, "pvc_used_gb": pvc_used_gb,
+            "pvc_avail_gb": pvc_avail_gb, "pvc_used_pct": pvc_used_pct,
+        }
     except Exception as e:
         logger.warning(f"[postgres] pg_wal check failed: {e}")
-        return {"wal_bytes": 0, "wal_mb": 0, "total_bytes": 0, "total_mb": 0, "error": str(e)}
+        return {"wal_bytes": 0, "wal_mb": 0, "total_bytes": 0, "total_mb": 0,
+                "pvc_total_gb": 0, "pvc_used_gb": 0, "pvc_avail_gb": 0, "pvc_used_pct": 0,
+                "error": str(e)}
 
 
 async def check_postgres() -> dict:
@@ -1441,10 +1464,11 @@ async def check_postgres() -> dict:
         total_mb = wal_result.get("total_mb", 0)
 
         # WAL status
+        pvc_used_pct = wal_result.get("pvc_used_pct", 0)
         wal_status = "ok"
-        if wal_mb >= PG_WAL_CRIT_MB:
+        if pvc_used_pct >= 90:
             wal_status = "error"
-        elif wal_mb >= PG_WAL_WARN_MB:
+        elif pvc_used_pct >= 80:
             wal_status = "warn"
 
         # Check for inactive replication slots (major WAL bloat cause)
@@ -1455,15 +1479,15 @@ async def check_postgres() -> dict:
                        else f"{len(repl_slots)} slot(s), all active")
 
         logger.info(f"[postgres] OK — {vs} | pg_wal={wal_mb}MB total={total_mb}MB "
-                    f"slots={len(repl_slots)} inactive={len(inactive_slots)}")
+                    f"PVC={pvc_used_pct}% slots={len(repl_slots)} inactive={len(inactive_slots)}")
         _timed("postgres", t0)
         return {
             "Connection": {"status": "ok", "detail": "Connected successfully"},
             "Version": {"status": "ok", "detail": vs},
             "Query Execution": {"status": "ok", "detail": "Queries running normally"},
-            "WAL Size": {
+            "PVC Disk": {
                 "status": wal_status,
-                "detail": f"{wal_mb}MB (warn: {PG_WAL_WARN_MB}MB, crit: {PG_WAL_CRIT_MB}MB)",
+                "detail": f"{wal_result.get('pvc_used_gb', 0)}GB / {wal_result.get('pvc_total_gb', 0)}GB ({pvc_used_pct}%)",
             },
             "Replication Slots": {
                 "status": slot_status,
@@ -1471,13 +1495,13 @@ async def check_postgres() -> dict:
             },
             "__pg_details__": {
                 "wal_mb": wal_mb,
-                "wal_warn_mb": PG_WAL_WARN_MB,
-                "wal_crit_mb": PG_WAL_CRIT_MB,
                 "total_mb": total_mb,
+                "pvc_total_gb": wal_result.get("pvc_total_gb", 0),
+                "pvc_used_gb": wal_result.get("pvc_used_gb", 0),
+                "pvc_avail_gb": wal_result.get("pvc_avail_gb", 0),
+                "pvc_used_pct": wal_result.get("pvc_used_pct", 0),
                 "db_sizes": [{"name": n, "size_bytes": s,
                               "size": f"{round(s / (1024*1024), 1)}MB"} for n, s in db_sizes],
-                "repl_slots": [{"name": s[0], "type": s[1], "active": s[2],
-                                "lag_mb": round((s[3] or 0) / (1024*1024), 1)} for s in repl_slots],
             },
         }
     except Exception as e:
@@ -1487,7 +1511,7 @@ async def check_postgres() -> dict:
             "Connection": {"status": "error", "detail": str(e)},
             "Version": {"status": "error", "detail": "N/A"},
             "Query Execution": {"status": "error", "detail": "N/A"},
-            "WAL Size": {"status": "error", "detail": "N/A"},
+            "PVC Disk": {"status": "error", "detail": "N/A"},
             "Replication Slots": {"status": "error", "detail": "N/A"},
             "__pg_details__": {},
         }
