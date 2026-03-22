@@ -8,6 +8,7 @@ import PodsPVCsPanel from './PodsPVCsPanel';
 import MinIOPanel from './MinIOPanel';
 import DataRetentionPanel from './DataRetentionPanel';
 import CertHealthPanel from './CertHealthPanel';
+import PostgresPanel from './PostgresPanel';
 import CheckRow from './CheckRow';
 
 const STATUS_RGB = { ok: '16,185,129', warn: '245,158,11', error: '239,68,68' };
@@ -42,6 +43,8 @@ export default function ServiceDetailPage({ svcKey, meta, checks, fetchTopic, di
         return <DataRetentionPanel checks={checks} />;
       case 'cert_health':
         return <CertHealthPanel checks={checks} />;
+      case 'postgres':
+        return <PostgresPanel checks={checks} />;
       default:
         return (
           <>

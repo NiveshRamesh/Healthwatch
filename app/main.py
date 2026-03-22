@@ -1355,6 +1355,12 @@ async def check_kafka() -> dict:
         }
 
 
+PG_WAL_WARN_MB = int(os.getenv("PG_WAL_WARN_MB", "100"))
+PG_WAL_CRIT_MB = int(os.getenv("PG_WAL_CRIT_MB", "500"))
+PG_POD_NAME = os.getenv("PG_POD_NAME", "postgresql-0")
+PG_DATA_PATH = os.getenv("PG_DATA_PATH", "/var/lib/postgresql/pg_data")
+
+
 def _sync_check_postgres() -> dict:
     """Synchronous postgres check — runs in a thread to avoid uvloop contention."""
     import asyncio as _aio, asyncpg
@@ -1366,9 +1372,55 @@ def _sync_check_postgres() -> dict:
         )
         ver = await conn.fetchval("SELECT version()")
         await conn.fetchval("SELECT 1")
+
+        # Get database sizes
+        db_sizes = await conn.fetch(
+            "SELECT datname, pg_database_size(datname) as size "
+            "FROM pg_database WHERE datistemplate = false ORDER BY size DESC"
+        )
+
+        # Get replication slots (stale slots cause WAL growth)
+        repl_slots = await conn.fetch(
+            "SELECT slot_name, slot_type, active, "
+            "pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn) as lag_bytes "
+            "FROM pg_replication_slots"
+        )
+
         await conn.close()
-        return ver
+        return {
+            "version": ver,
+            "db_sizes": [(r["datname"], r["size"]) for r in db_sizes],
+            "repl_slots": [(r["slot_name"], r["slot_type"], r["active"],
+                           r["lag_bytes"]) for r in repl_slots],
+        }
     return _aio.run(_inner())
+
+
+def _sync_check_pg_wal() -> dict:
+    """Check pg_wal size via kubectl exec into postgres pod."""
+    try:
+        result = _sync_exec_pod(
+            PG_POD_NAME, K8S_NAMESPACE,
+            f"du -sb {PG_DATA_PATH}/pg_wal 2>/dev/null || echo '0\t'"
+        )
+        parts = result.strip().split()
+        wal_bytes = int(parts[0]) if parts else 0
+        wal_mb = round(wal_bytes / (1024 * 1024), 1)
+
+        # Also get total PGDATA size
+        result2 = _sync_exec_pod(
+            PG_POD_NAME, K8S_NAMESPACE,
+            f"du -sb {PG_DATA_PATH} 2>/dev/null || echo '0\t'"
+        )
+        parts2 = result2.strip().split()
+        total_bytes = int(parts2[0]) if parts2 else 0
+        total_mb = round(total_bytes / (1024 * 1024), 1)
+
+        return {"wal_bytes": wal_bytes, "wal_mb": wal_mb,
+                "total_bytes": total_bytes, "total_mb": total_mb}
+    except Exception as e:
+        logger.warning(f"[postgres] pg_wal check failed: {e}")
+        return {"wal_bytes": 0, "wal_mb": 0, "total_bytes": 0, "total_mb": 0, "error": str(e)}
 
 
 async def check_postgres() -> dict:
@@ -1378,14 +1430,55 @@ async def check_postgres() -> dict:
         import concurrent.futures
         loop = asyncio.get_event_loop()
         with concurrent.futures.ThreadPoolExecutor() as pool:
-            ver = await loop.run_in_executor(pool, _sync_check_postgres)
+            pg_result = await loop.run_in_executor(pool, _sync_check_postgres)
+            wal_result = await loop.run_in_executor(pool, _sync_check_pg_wal)
+
+        ver = pg_result["version"]
         vs = ver.split(",")[0]
-        logger.info(f"[postgres] OK — {vs}")
+        db_sizes = pg_result.get("db_sizes", [])
+        repl_slots = pg_result.get("repl_slots", [])
+        wal_mb = wal_result.get("wal_mb", 0)
+        total_mb = wal_result.get("total_mb", 0)
+
+        # WAL status
+        wal_status = "ok"
+        if wal_mb >= PG_WAL_CRIT_MB:
+            wal_status = "error"
+        elif wal_mb >= PG_WAL_WARN_MB:
+            wal_status = "warn"
+
+        # Check for inactive replication slots (major WAL bloat cause)
+        inactive_slots = [s for s in repl_slots if not s[2]]  # active=False
+        slot_status = "warn" if inactive_slots else "ok"
+        slot_detail = (f"{len(inactive_slots)} inactive slot(s) — WAL cannot be cleaned"
+                       if inactive_slots
+                       else f"{len(repl_slots)} slot(s), all active")
+
+        logger.info(f"[postgres] OK — {vs} | pg_wal={wal_mb}MB total={total_mb}MB "
+                    f"slots={len(repl_slots)} inactive={len(inactive_slots)}")
         _timed("postgres", t0)
         return {
             "Connection": {"status": "ok", "detail": "Connected successfully"},
             "Version": {"status": "ok", "detail": vs},
             "Query Execution": {"status": "ok", "detail": "Queries running normally"},
+            "WAL Size": {
+                "status": wal_status,
+                "detail": f"{wal_mb}MB (warn: {PG_WAL_WARN_MB}MB, crit: {PG_WAL_CRIT_MB}MB)",
+            },
+            "Replication Slots": {
+                "status": slot_status,
+                "detail": slot_detail,
+            },
+            "__pg_details__": {
+                "wal_mb": wal_mb,
+                "wal_warn_mb": PG_WAL_WARN_MB,
+                "wal_crit_mb": PG_WAL_CRIT_MB,
+                "total_mb": total_mb,
+                "db_sizes": [{"name": n, "size_bytes": s,
+                              "size": f"{round(s / (1024*1024), 1)}MB"} for n, s in db_sizes],
+                "repl_slots": [{"name": s[0], "type": s[1], "active": s[2],
+                                "lag_mb": round((s[3] or 0) / (1024*1024), 1)} for s in repl_slots],
+            },
         }
     except Exception as e:
         logger.error(f"[postgres] EXCEPTION: {e}\n{traceback.format_exc()}")
@@ -1394,6 +1487,9 @@ async def check_postgres() -> dict:
             "Connection": {"status": "error", "detail": str(e)},
             "Version": {"status": "error", "detail": "N/A"},
             "Query Execution": {"status": "error", "detail": "N/A"},
+            "WAL Size": {"status": "error", "detail": "N/A"},
+            "Replication Slots": {"status": "error", "detail": "N/A"},
+            "__pg_details__": {},
         }
 
 
