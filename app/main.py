@@ -4218,6 +4218,61 @@ async def analyze_check(request: Request):
         return {"error": str(e)}
 
 
+@app.post("/api/analyze/chat")
+async def analyze_chat(request: Request):
+    """Follow-up chat for AI analysis — send command output, errors, questions."""
+    if not AI_API_KEY:
+        return {"error": "AI API key not configured."}
+
+    body = await request.json()
+    messages = body.get("messages", [])  # [{role, content}, ...]
+    check_name = body.get("check_name", "")
+    section = body.get("section", "")
+
+    if not messages:
+        return {"error": "No messages provided"}
+
+    provider, model = _detect_ai_provider()
+    logger.info(f"[analyze:chat] provider={provider} model={model} msgs={len(messages)}")
+
+    try:
+        import httpx
+
+        # Build messages with system prompt
+        all_messages = [
+            {"role": "system", "content": ANALYZE_SYSTEM_PROMPT +
+             "\n\nYou are in a follow-up conversation about a health check issue. "
+             "The user may paste command output, error messages, or ask questions. "
+             "Provide specific, actionable responses. If the user pastes an error, "
+             "diagnose it and suggest the next step. Keep responses concise."},
+        ] + messages
+
+        if provider in ("grok", "groq"):
+            url = "https://api.groq.com/openai/v1/chat/completions" if provider == "groq" else "https://api.x.ai/v1/chat/completions"
+            payload = {"model": model, "messages": all_messages, "temperature": 0.3, "max_tokens": 1500}
+            headers = {"Authorization": f"Bearer {AI_API_KEY}", "Content-Type": "application/json"}
+            async with httpx.AsyncClient(timeout=60) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+            if resp.status_code != 200:
+                return {"error": f"API returned {resp.status_code}: {resp.text[:200]}"}
+            text = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+        else:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={AI_API_KEY}"
+            combined = "\n\n".join(f"{'User' if m['role']=='user' else 'Assistant'}: {m['content']}" for m in all_messages)
+            payload = {"contents": [{"parts": [{"text": combined}]}],
+                       "generationConfig": {"temperature": 0.3, "maxOutputTokens": 1500}}
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.post(url, json=payload)
+            if resp.status_code != 200:
+                return {"error": f"API returned {resp.status_code}: {resp.text[:200]}"}
+            text = resp.json().get("candidates", [{}])[0].get("content", {}).get("parts", [{}])[0].get("text", "")
+
+        return {"reply": text}
+    except Exception as e:
+        logger.error(f"[analyze:chat] EXCEPTION: {e}")
+        return {"error": str(e)}
+
+
 @app.get("/api/health")
 async def health():
     return {"status": "ok", "last_checked": last_checked, "is_running": is_running}

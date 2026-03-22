@@ -51,6 +51,12 @@ export default function AnalyzeModal({ checkName, section, status, detail, data,
   const [error, setError] = useState(null);
   const [tab, setTab] = useState('rca');
   const modalRef = useRef();
+  const chatEndRef = useRef();
+
+  // Chat state
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
 
   useEffect(() => {
     const fetchAnalysis = async () => {
@@ -263,8 +269,117 @@ export default function AnalyzeModal({ checkName, section, status, detail, data,
               )}
             </>
           )}
+
+          {/* Chat follow-up section */}
+          {analysis && (
+            <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+              <div style={{ fontSize: '0.68rem', fontWeight: 600, color: 'var(--text)', marginBottom: 8 }}>
+                Follow-up — paste errors or ask questions
+              </div>
+
+              {/* Chat messages */}
+              {chatMessages.length > 0 && (
+                <div style={{ maxHeight: 250, overflowY: 'auto', marginBottom: 8 }}>
+                  {chatMessages.map((msg, i) => (
+                    <div key={i} style={{
+                      padding: '8px 12px', marginBottom: 6, borderRadius: 8,
+                      background: msg.role === 'user' ? 'rgba(0,153,255,0.08)' : 'rgba(0,212,170,0.06)',
+                      border: `1px solid ${msg.role === 'user' ? 'rgba(0,153,255,0.15)' : 'rgba(0,212,170,0.12)'}`,
+                    }}>
+                      <div style={{ fontSize: '0.5rem', fontFamily: 'var(--mono)', fontWeight: 700,
+                                    color: msg.role === 'user' ? 'var(--accent2)' : 'var(--accent)',
+                                    marginBottom: 4, textTransform: 'uppercase' }}>
+                        {msg.role === 'user' ? 'You' : 'AI'}
+                      </div>
+                      <div style={{ fontSize: '0.68rem', color: 'var(--text)', lineHeight: 1.6,
+                                    whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontFamily: 'var(--mono)' }}>
+                        {msg.content}
+                      </div>
+                    </div>
+                  ))}
+                  {chatLoading && (
+                    <div style={{ padding: '8px 12px', fontSize: '0.65rem', color: 'var(--muted)', fontStyle: 'italic' }}>
+                      Thinking...
+                    </div>
+                  )}
+                  <div ref={chatEndRef} />
+                </div>
+              )}
+
+              {/* Input */}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <textarea
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      sendChat();
+                    }
+                  }}
+                  placeholder="Paste error output or ask a follow-up question..."
+                  style={{
+                    flex: 1, background: 'rgba(0,0,0,0.2)', border: '1px solid var(--border)',
+                    borderRadius: 8, padding: '8px 12px', color: 'var(--text)',
+                    fontFamily: 'var(--mono)', fontSize: '0.65rem', resize: 'vertical',
+                    minHeight: 40, maxHeight: 120, outline: 'none',
+                  }}
+                />
+                <button
+                  onClick={sendChat}
+                  disabled={chatLoading || !chatInput.trim()}
+                  style={{
+                    background: chatInput.trim() ? 'rgba(0,212,170,0.15)' : 'var(--surface3)',
+                    color: chatInput.trim() ? 'var(--accent)' : 'var(--muted)',
+                    border: `1px solid ${chatInput.trim() ? 'rgba(0,212,170,0.3)' : 'var(--border)'}`,
+                    borderRadius: 8, padding: '8px 14px', cursor: chatInput.trim() ? 'pointer' : 'not-allowed',
+                    fontFamily: 'var(--mono)', fontSize: '0.65rem', fontWeight: 700, flexShrink: 0,
+                  }}
+                >Send</button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
+
+  async function sendChat() {
+    const msg = chatInput.trim();
+    if (!msg || chatLoading) return;
+
+    const userMsg = { role: 'user', content: msg };
+    const newMessages = [...chatMessages, userMsg];
+    setChatMessages(newMessages);
+    setChatInput('');
+    setChatLoading(true);
+    setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+
+    try {
+      // Build context: initial analysis + chat history
+      const contextMessages = [
+        { role: 'user', content: `Initial analysis for "${checkName}" (${status}): ${detail}` },
+        { role: 'assistant', content: analysis?.rca || 'No initial analysis' },
+        ...newMessages,
+      ];
+
+      const res = await fetch(`${BASE}/api/analyze/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: contextMessages, check_name: checkName, section }),
+      });
+      const json = await res.json();
+
+      if (json.reply) {
+        setChatMessages(prev => [...prev, { role: 'assistant', content: json.reply }]);
+      } else if (json.error) {
+        setChatMessages(prev => [...prev, { role: 'assistant', content: `Error: ${json.error}` }]);
+      }
+    } catch (e) {
+      setChatMessages(prev => [...prev, { role: 'assistant', content: `Error: ${e.message}` }]);
+    } finally {
+      setChatLoading(false);
+      setTimeout(() => chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
+    }
+  }
 }
