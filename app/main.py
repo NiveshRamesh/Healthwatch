@@ -2149,7 +2149,7 @@ POD_DEPENDENCIES = {
         ("Denver",     DENVER_URL,   "tcp"),
     ],
     "keycloak-deployment": [
-        ("PostgreSQL", "http://timescaledb-1.vsmaps.svc.cluster.local:5432", "tcp"),
+        ("PostgreSQL", PG_URL, "tcp"),
     ],
     "kafka-cluster-cp-kafka-0": [
         ("Zookeeper",  ZK_URL,       "tcp"),
