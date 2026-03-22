@@ -2714,11 +2714,10 @@ async def run_all_checks():
             "cert_health": safe(k8s_certs, "Cert Health"),
             "backups": {
                 "Last Backup": {
-                    "status": "ok" if _backup_state.get("last_result") else "warn",
-                    "detail": (_backup_state["last_result"]["name"] + " · " +
-                               _backup_state["last_result"].get("total_size", "?")
+                    "status": "ok",
+                    "detail": (_backup_state["last_result"]["timestamp"].replace("-", "/", 2).replace("-", " ", 1)
                                if _backup_state.get("last_result")
-                               else "No backups yet — click Run Backup"),
+                               else "No backups yet"),
                 },
             },
         }
