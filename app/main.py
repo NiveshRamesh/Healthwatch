@@ -3962,24 +3962,23 @@ async def backup_list():
 
 @app.get("/api/backup/download/{backup_name}")
 async def backup_download(backup_name: str):
-    """Download a backup as a tar.gz archive."""
-    import tarfile, io
-    from fastapi.responses import StreamingResponse
+    """Download a backup as a tar.gz archive. Creates tar on disk first to avoid OOM."""
+    import tarfile
 
     backup_dir = BACKUP_BASE_DIR / backup_name
     if not backup_dir.exists():
         return {"status": "error", "detail": "Backup not found"}
 
-    # Create tar.gz in memory
-    buf = io.BytesIO()
-    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
-        tar.add(str(backup_dir), arcname=backup_name)
-    buf.seek(0)
+    # Create tar.gz on disk (not in memory — avoids OOM for large backups)
+    tar_path = BACKUP_BASE_DIR / f"{backup_name}.tar.gz"
+    if not tar_path.exists():
+        with tarfile.open(str(tar_path), "w:gz") as tar:
+            tar.add(str(backup_dir), arcname=backup_name)
 
-    return StreamingResponse(
-        buf,
+    return FileResponse(
+        str(tar_path),
         media_type="application/gzip",
-        headers={"Content-Disposition": f"attachment; filename={backup_name}.tar.gz"},
+        filename=f"{backup_name}.tar.gz",
     )
 
 
