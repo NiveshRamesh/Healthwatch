@@ -4009,9 +4009,20 @@ async def backup_download(backup_name: str):
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI-POWERED RCA ANALYSIS (Gemini API)
 # ═══════════════════════════════════════════════════════════════════════════════
-AI_API_KEY = os.getenv("GEMINI_API_KEY", "") or os.getenv("GROK_API_KEY", "") or os.getenv("AI_API_KEY", "")
-AI_PROVIDER = os.getenv("AI_PROVIDER", "grok")  # "grok" or "gemini"
-AI_MODEL = os.getenv("AI_MODEL", "grok-3-mini-fast")
+AI_API_KEY = os.getenv("GROK_API_KEY", "") or os.getenv("GEMINI_API_KEY", "") or os.getenv("AI_API_KEY", "")
+AI_MODEL = os.getenv("AI_MODEL", "")
+
+def _detect_ai_provider():
+    """Auto-detect provider from API key prefix."""
+    key = AI_API_KEY
+    if key.startswith("gsk_"):
+        return "groq", AI_MODEL or "llama-3.3-70b-versatile"
+    elif key.startswith("xai-"):
+        return "grok", AI_MODEL or "grok-3-mini-fast"
+    elif key.startswith("AIza"):
+        return "gemini", AI_MODEL or "gemini-2.0-flash"
+    else:
+        return os.getenv("AI_PROVIDER", "groq"), AI_MODEL or "llama-3.3-70b-versatile"
 
 ANALYZE_SYSTEM_PROMPT = """You are an expert SRE engineer for VuSmart, a monitoring and observability platform running on Kubernetes.
 
@@ -4068,15 +4079,16 @@ async def analyze_check(request: Request):
         f"Analyze this failure and provide RCA with investigation steps and fix commands."
     )
 
-    logger.info(f"[analyze] START provider={AI_PROVIDER} model={AI_MODEL} check={check_name}")
+    provider, model = _detect_ai_provider()
+    logger.info(f"[analyze] START provider={provider} model={model} check={check_name}")
 
     try:
         import httpx
 
-        if AI_PROVIDER == "grok":
-            url = "https://api.x.ai/v1/chat/completions"
+        if provider in ("grok", "groq"):
+            url = "https://api.groq.com/openai/v1/chat/completions" if provider == "groq" else "https://api.x.ai/v1/chat/completions"
             payload = {
-                "model": AI_MODEL,
+                "model": model,
                 "messages": [
                     {"role": "system", "content": ANALYZE_SYSTEM_PROMPT},
                     {"role": "user", "content": user_message},
@@ -4090,15 +4102,15 @@ async def analyze_check(request: Request):
                 resp = await client.post(url, json=payload, headers=headers)
 
             if resp.status_code != 200:
-                logger.error(f"[analyze] Grok API error: {resp.status_code} {resp.text[:300]}")
-                return {"error": f"Grok API returned {resp.status_code}: {resp.text[:200]}"}
+                logger.error(f"[analyze] {provider} API error: {resp.status_code} {resp.text[:300]}")
+                return {"error": f"{provider} API returned {resp.status_code}: {resp.text[:200]}"}
 
             result = resp.json()
             text = result.get("choices", [{}])[0].get("message", {}).get("content", "")
 
         else:
             # Gemini fallback
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{AI_MODEL}:generateContent?key={AI_API_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={AI_API_KEY}"
             payload = {
                 "contents": [{"parts": [{"text": ANALYZE_SYSTEM_PROMPT + "\n\n" + user_message}]}],
                 "generationConfig": {"temperature": 0.3, "maxOutputTokens": 2048,
@@ -4131,7 +4143,7 @@ async def analyze_check(request: Request):
                             "fix_commands": [], "relevant_logs": [],
                             "severity": "medium", "impact": "See analysis above"}
 
-        logger.info(f"[analyze] OK provider={AI_PROVIDER} severity={analysis.get('severity', '?')}")
+        logger.info(f"[analyze] OK provider={provider} severity={analysis.get('severity', '?')}")
         return analysis
 
     except Exception as e:
