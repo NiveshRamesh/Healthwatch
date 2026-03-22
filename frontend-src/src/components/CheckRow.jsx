@@ -100,16 +100,16 @@ export default function CheckRow({ name, check, details, onRestartClick, onExpan
             onClick={() => setShowAnalyze(true)}
             title="AI-powered RCA and fix suggestions"
             style={{
-              display:'inline-flex', alignItems:'center', gap:3,
-              fontSize:'0.62rem', fontFamily:'var(--mono)', fontWeight:700,
-              padding:'2px 8px', borderRadius:5, cursor:'pointer',
+              display:'inline-flex', alignItems:'center', gap:2,
+              fontSize:'0.55rem', fontFamily:'var(--mono)', fontWeight:700,
+              padding:'2px 6px', borderRadius:4, cursor:'pointer',
               border:'1px solid var(--border)', color:'var(--muted)',
               background:'transparent', whiteSpace:'nowrap', flexShrink:0,
               transition:'all 0.15s',
             }}
             onMouseEnter={e => { e.currentTarget.style.borderColor='var(--accent)'; e.currentTarget.style.color='var(--accent)'; }}
             onMouseLeave={e => { e.currentTarget.style.borderColor='var(--border)'; e.currentTarget.style.color='var(--muted)'; }}
-          >🔍 Analyze</span>
+          >🔍</span>
         )}
 
         <span style={{ fontSize:'1rem', color:`var(--${status === 'ok' ? 'ok' : status === 'warn' ? 'warn' : status === 'error' ? 'error' : 'unknown'})` }}>

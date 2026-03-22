@@ -12,16 +12,16 @@ export default function AnalyzeButton({ checkName, section, status, detail, data
         onClick={(e) => { e.stopPropagation(); setShow(true); }}
         title="AI-powered RCA and fix suggestions"
         style={{
-          display: 'inline-flex', alignItems: 'center', gap: 3,
-          fontSize: '0.58rem', fontFamily: 'var(--mono)', fontWeight: 700,
-          padding: '2px 7px', borderRadius: 5, cursor: 'pointer',
+          display: 'inline-flex', alignItems: 'center', gap: 2,
+          fontSize: '0.5rem', fontFamily: 'var(--mono)', fontWeight: 700,
+          padding: '1px 5px', borderRadius: 4, cursor: 'pointer',
           border: '1px solid var(--border)', color: 'var(--muted)',
           background: 'transparent', whiteSpace: 'nowrap', flexShrink: 0,
-          transition: 'all 0.15s',
+          transition: 'all 0.15s', lineHeight: 1.4,
         }}
         onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--accent)'; e.currentTarget.style.color = 'var(--accent)'; }}
         onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--border)'; e.currentTarget.style.color = 'var(--muted)'; }}
-      >🔍 Analyze</span>
+      >🔍</span>
       {show && (
         <AnalyzeModal
           checkName={checkName}
