@@ -1368,6 +1368,7 @@ async def check_postgres() -> dict:
             password=POSTGRES_PASSWORD,
             database=POSTGRES_DB,
             timeout=10,
+            ssl=False,
         )
         ver = await conn.fetchval("SELECT version()")
         await conn.fetchval("SELECT 1")
@@ -1609,7 +1610,7 @@ async def check_data_retention() -> dict:
             conn = await asyncpg.connect(
                 host=POSTGRES_HOST, port=POSTGRES_PORT,
                 user=POSTGRES_USER, password=POSTGRES_PASSWORD,
-                database="multicore", timeout=10,
+                database="multicore", timeout=10, ssl=False,
             )
             rows = await conn.fetch(
                 "SELECT name, tables, data_category, data_retention_period, data_store_type "
