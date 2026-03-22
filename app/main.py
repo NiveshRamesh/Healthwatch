@@ -1355,24 +1355,30 @@ async def check_kafka() -> dict:
         }
 
 
-async def check_postgres() -> dict:
-    t0 = time.time()
-    logger.info(f"[postgres] START {POSTGRES_HOST}:{POSTGRES_PORT} db={POSTGRES_DB}")
-    try:
-        import asyncpg
-
+def _sync_check_postgres() -> dict:
+    """Synchronous postgres check — runs in a thread to avoid uvloop contention."""
+    import asyncio as _aio, asyncpg
+    async def _inner():
         conn = await asyncpg.connect(
-            host=POSTGRES_HOST,
-            port=POSTGRES_PORT,
-            user=POSTGRES_USER,
-            password=POSTGRES_PASSWORD,
-            database=POSTGRES_DB,
-            timeout=10,
-            ssl=False,
+            host=POSTGRES_HOST, port=POSTGRES_PORT,
+            user=POSTGRES_USER, password=POSTGRES_PASSWORD,
+            database=POSTGRES_DB, timeout=10, ssl=False,
         )
         ver = await conn.fetchval("SELECT version()")
         await conn.fetchval("SELECT 1")
         await conn.close()
+        return ver
+    return _aio.run(_inner())
+
+
+async def check_postgres() -> dict:
+    t0 = time.time()
+    logger.info(f"[postgres] START {POSTGRES_HOST}:{POSTGRES_PORT} db={POSTGRES_DB}")
+    try:
+        import concurrent.futures
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            ver = await loop.run_in_executor(pool, _sync_check_postgres)
         vs = ver.split(",")[0]
         logger.info(f"[postgres] OK — {vs}")
         _timed("postgres", t0)
@@ -1607,17 +1613,26 @@ async def check_data_retention() -> dict:
         policy_source = "default"
 
         try:
-            conn = await asyncpg.connect(
-                host=POSTGRES_HOST, port=POSTGRES_PORT,
-                user=POSTGRES_USER, password=POSTGRES_PASSWORD,
-                database="multicore", timeout=10, ssl=False,
-            )
-            rows = await conn.fetch(
-                "SELECT name, tables, data_category, data_retention_period, data_store_type "
-                "FROM public.vusoft_vusoftdatamanagement "
-                "WHERE tables IS NOT NULL AND data_retention_period IS NOT NULL"
-            )
-            await conn.close()
+            import concurrent.futures
+            def _sync_fetch_retention():
+                import asyncio as _aio
+                async def _inner():
+                    conn = await asyncpg.connect(
+                        host=POSTGRES_HOST, port=POSTGRES_PORT,
+                        user=POSTGRES_USER, password=POSTGRES_PASSWORD,
+                        database="multicore", timeout=10, ssl=False,
+                    )
+                    rows = await conn.fetch(
+                        "SELECT name, tables, data_category, data_retention_period, data_store_type "
+                        "FROM public.vusoft_vusoftdatamanagement "
+                        "WHERE tables IS NOT NULL AND data_retention_period IS NOT NULL"
+                    )
+                    await conn.close()
+                    return rows
+                return _aio.run(_inner())
+            loop = asyncio.get_event_loop()
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                rows = await loop.run_in_executor(pool, _sync_fetch_retention)
 
             for row in rows:
                 policy_name = (row["name"] or "").strip()
