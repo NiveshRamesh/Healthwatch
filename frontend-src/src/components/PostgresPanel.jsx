@@ -194,7 +194,6 @@ export default function PostgresPanel({ checks }) {
     <>
       <StatusStrip checks={checks} />
       <DiskBar details={details} />
-      <DatabaseSizes dbSizes={details.db_sizes} />
     </>
   );
 }
