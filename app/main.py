@@ -2577,6 +2577,8 @@ async def run_all_checks():
     logger.info("=" * 60)
     logger.info("HealthWatch: START full check run")
     logger.info("=" * 60)
+    # Clear analyze cache so new failures get fresh AI analysis
+    _analyze_cache.clear()
     try:
         results = await asyncio.gather(
             check_clickhouse_connectivity(),
@@ -4055,9 +4057,13 @@ IMPORTANT: Return ONLY valid JSON with this exact structure (no markdown, no cod
 }"""
 
 
+_analyze_cache: dict = {}  # key: "section:check_name:detail_hash" -> {result, timestamp}
+ANALYZE_CACHE_TTL = 300  # 5 minutes — matches health check interval
+
+
 @app.post("/api/analyze")
 async def analyze_check(request: Request):
-    """AI-powered RCA analysis using Grok or Gemini API."""
+    """AI-powered RCA analysis with caching. Same check returns cached result for 5 min."""
     if not AI_API_KEY:
         return {"error": "AI API key not configured. Set GROK_API_KEY or GEMINI_API_KEY in Helm secrets."}
 
@@ -4067,6 +4073,13 @@ async def analyze_check(request: Request):
     status = body.get("status", "error")
     detail = body.get("detail", "")
     data = body.get("data", {})
+
+    # Check cache — same check + same detail = same result
+    cache_key = f"{section}:{check_name}:{hash(detail)}"
+    cached = _analyze_cache.get(cache_key)
+    if cached and (time.time() - cached["timestamp"]) < ANALYZE_CACHE_TTL:
+        logger.info(f"[analyze] CACHE HIT for {check_name} (age={int(time.time() - cached['timestamp'])}s)")
+        return cached["result"]
 
     data_str = json.dumps(data, default=str)[:3000] if data else "{}"
     user_message = (
@@ -4144,6 +4157,8 @@ async def analyze_check(request: Request):
                             "severity": "medium", "impact": "See analysis above"}
 
         logger.info(f"[analyze] OK provider={provider} severity={analysis.get('severity', '?')}")
+        # Cache the result
+        _analyze_cache[cache_key] = {"result": analysis, "timestamp": time.time()}
         return analysis
 
     except Exception as e:
