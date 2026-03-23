@@ -155,22 +155,24 @@ const STATUS_SORT = { critical: 0, error: 0, warn: 1, ok: 2 };
 
 /* ── Pod resource row — compact with inline bars ──────────────── */
 function PodResourceRow({ pod, even }) {
+  const [hovered, setHovered] = useState(false);
   const { pod: name, cpu_used_pct, memory_used_pct, status } = pod;
   const cpuStatus = cpu_used_pct >= 90 ? 'critical' : cpu_used_pct >= 70 ? 'warn' : 'ok';
   const memStatus = memory_used_pct >= 90 ? 'critical' : memory_used_pct >= 80 ? 'warn' : 'ok';
   const cpuColor = cpuStatus === 'ok' ? 'var(--ok)' : cpuStatus === 'warn' ? 'var(--warn)' : 'var(--error)';
   const memColor = memStatus === 'ok' ? 'var(--ok)' : memStatus === 'warn' ? 'var(--warn)' : 'var(--error)';
+  const canAnalyze = ['error', 'critical', 'warn'].includes(status);
 
   return (
     <div style={{
       display: 'grid', gridTemplateColumns: 'minmax(0, 2.5fr) minmax(0, 1.5fr) minmax(0, 1.5fr) 90px',
       alignItems: 'center', gap: 8,
       padding: '7px 14px 7px 16px',
-      background: even ? 'rgba(255,255,255,0.02)' : 'transparent',
+      background: hovered ? 'rgba(0,212,170,0.04)' : even ? 'rgba(255,255,255,0.02)' : 'transparent',
       transition: 'background 0.15s',
     }}
-      onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,212,170,0.04)'}
-      onMouseLeave={e => e.currentTarget.style.background = even ? 'rgba(255,255,255,0.02)' : 'transparent'}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
     >
       <span style={{
         fontFamily: 'var(--mono)', fontSize: '0.68rem',
@@ -198,9 +200,11 @@ function PodResourceRow({ pod, even }) {
       </div>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-        <AnalyzeButton checkName={`Pod: ${name}`} section="kubernetes" status={status}
-          detail={`CPU: ${(cpu_used_pct||0).toFixed(1)}%, MEM: ${(memory_used_pct||0).toFixed(1)}%`}
-          data={pod} />
+        {hovered && canAnalyze && (
+          <AnalyzeButton checkName={`Pod: ${name}`} section="kubernetes" status={status}
+            detail={`CPU: ${(cpu_used_pct||0).toFixed(1)}%, MEM: ${(memory_used_pct||0).toFixed(1)}%`}
+            data={pod} />
+        )}
         <Badge status={status} size="sm" />
       </div>
     </div>
